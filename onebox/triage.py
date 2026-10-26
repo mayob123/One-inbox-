@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # --- word and sender lists -------------------------------------------------
 
@@ -84,6 +84,15 @@ AREA_RULES = [
     (r"tandl|doctor|læge|dentist", "Admin & bills", "admin"),
 ]
 
+# Danish official post. Their alert emails go straight to Things for today, so they sit on
+# the watch until ticked off. Matched on the real sender domain only, so lookalikes don't count.
+OFFICIAL_POST = {
+    "e-Boks": ("e-boks.dk", "e-boks.com"),
+    "Digital Post": ("mit.dk", "digitalpost.dk", "borger.dk"),
+    "Aula": ("aula.dk",),
+}
+AUTO_ADD_DAYS = 7  # older alerts stay on the page, so a first sync doesn't flood Things
+
 SUBJECT_PREFIX = re.compile(r"^\s*((re|fwd?|fw|sv|vs|aw|vb|accepted|declined|opdateret invitation)\s*:\s*)+", re.I)
 
 
@@ -125,6 +134,7 @@ class Item:
     why: str
     lang: str = "en"
     evidence: list = field(default_factory=list)
+    auto: str = ""  # "things": the Pi queues it for Things as soon as it first sees it
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -152,6 +162,14 @@ def is_scam(msg: Message) -> str | None:
             return f"Says it's from {brand.title()}, but was sent from {msg.domain or 'an unknown address'}."
     if SCAM_SUBJECT.search(msg.subject):
         return f"Asks you to update payment or account details, sent from {msg.domain or 'an unknown address'}."
+    return None
+
+
+def official_post(msg: Message) -> str | None:
+    """e-Boks, Digital Post or Aula, judged by the sender's real domain."""
+    for name, domains in OFFICIAL_POST.items():
+        if _domain_matches(msg.domain, domains):
+            return name
     return None
 
 
@@ -189,7 +207,11 @@ def suggest_task(msg: Message, kind: str) -> str:
         text = f"Put in calendar: {subject}"
     else:
         text = f"Deal with: {subject}"
-    return text if len(text) <= 70 else text[:69] + "…"
+    return _cut(text)
+
+
+def _cut(text: str, n: int = 70) -> str:
+    return text if len(text) <= n else text[:n - 1] + "…"
 
 
 def find_done_evidence(msg: Message, later: list[Message]) -> list[str]:
@@ -240,8 +262,9 @@ def _same_org(a: str, b: str) -> bool:
     return root(a) == root(b)
 
 
-def triage(messages: list[Message]) -> list[Item]:
+def triage(messages: list[Message], now: datetime | None = None) -> list[Item]:
     """Turn mail headers into triage items. Sent mail is only used as evidence."""
+    now = now or utcnow()
     inbound = sorted((m for m in messages if not m.is_sent), key=lambda m: m.received)
     sent = [m for m in messages if m.is_sent]
     items = []
@@ -256,6 +279,17 @@ def triage(messages: list[Message]) -> list[Item]:
         scam = is_scam(msg)
         if scam:
             items.append(Item(status="scam", why=scam + " Don't click anything in it.", **base))
+            continue
+        post = official_post(msg)
+        if post:  # before the noise and confirmation rules: "Du har modtaget ny post" is not a receipt
+            evidence = find_done_evidence(msg, sent)
+            if evidence:
+                items.append(Item(status="done", why=" ".join(evidence), evidence=evidence, **base))
+                continue
+            fresh = now - msg.received <= timedelta(days=AUTO_ADD_DAYS)
+            base["task"] = _cut(f"Read in {post}: {base['title']}")
+            why = f"New in {post}. " + ("Added to Things for today." if fresh else "Older than a week, so not added.")
+            items.append(Item(status="decide", why=why, auto="things" if fresh else "", **base))
             continue
         if SECURITY_NOTICE.search(msg.subject):
             items.append(Item(status="info", why="Account security notice. Ignore it if this was you.", **base))
@@ -278,6 +312,17 @@ def triage(messages: list[Message]) -> list[Item]:
             why = "In Danish. " + why
         items.append(Item(status="decide", why=why, **base))
     return items
+
+
+def capture_item(text: str, now: datetime) -> Item:
+    """A to-do Ben typed or dictated himself. It goes to Things for today."""
+    text = re.sub(r"\s+", " ", text).strip()
+    msg = Message(msg_id=f"capture|{now.isoformat()}|{text}", sender_name="", sender_addr="",
+                  subject=text, received=now, account="capture")
+    area, kind = classify_area(msg)
+    return Item(id=item_id(msg), status="decide", title=text, task=_cut(text, 200), area=area, kind=kind,
+                source="capture", sender="You", received=now.isoformat(timespec="seconds"),
+                why="You added this.", lang=language(msg), auto="things")
 
 
 def summary(items: list[Item]) -> dict:

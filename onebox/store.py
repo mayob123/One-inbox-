@@ -51,15 +51,22 @@ class Store:
     # --- items -------------------------------------------------------------
 
     def upsert_items(self, items: list[dict]) -> int:
-        """Insert new items and refresh known ones. Ben's decisions are never overwritten."""
+        """Insert new items and refresh known ones. Ben's decisions are never overwritten.
+
+        Items marked auto="things" (e-Boks, Aula, quick capture) are queued for Things the
+        first time they are seen. Ben can still untick them on the page before the Mac syncs.
+        """
         ts = now_iso()
         with self.lock:
             for it in items:
+                auto = it.get("auto") == "things"
                 self.db.execute(
-                    """INSERT INTO items (id, data, status, received, seen_at) VALUES (?, ?, ?, ?, ?)
+                    """INSERT INTO items (id, data, status, received, seen_at, decision, decided_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(id) DO UPDATE SET data=excluded.data, status=excluded.status,
                        seen_at=excluded.seen_at""",
-                    (it["id"], json.dumps(it), it["status"], it["received"], ts),
+                    (it["id"], json.dumps(it), it["status"], it["received"], ts,
+                     "add" if auto else None, ts if auto else None),
                 )
             self.db.commit()
         return len(items)

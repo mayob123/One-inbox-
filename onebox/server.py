@@ -3,7 +3,7 @@
 Run:  python3 -m onebox.server
 Config comes from environment variables (see docs/setup.md):
   ONEBOX_DB, ONEBOX_HOST, ONEBOX_PORT, ONEBOX_TZ,
-  ONEBOX_UI_KEY, ONEBOX_AGENT_TOKEN, ONEBOX_WATCH_TOKEN
+  ONEBOX_UI_KEY, ONEBOX_AGENT_TOKEN, ONEBOX_WATCH_TOKEN, ONEBOX_CAPTURE_TOKEN (optional)
 """
 
 from __future__ import annotations
@@ -22,10 +22,12 @@ from zoneinfo import ZoneInfo
 
 from . import feed
 from .store import Store
+from .triage import capture_item
 
 WEB_DIR = Path(__file__).parent / "web"
 COOKIE = "onebox_key"
 MAX_BODY = 2_000_000
+MAX_CAPTURE = 500
 
 
 class Config:
@@ -37,8 +39,11 @@ class Config:
         self.ui_key = env.get("ONEBOX_UI_KEY", "")
         self.agent_token = env.get("ONEBOX_AGENT_TOKEN", "")
         self.watch_token = env.get("ONEBOX_WATCH_TOKEN", "")
+        self.capture_token = env.get("ONEBOX_CAPTURE_TOKEN", "")  # for the iPhone Shortcut; optional
         missing = [n for n, v in [("ONEBOX_UI_KEY", self.ui_key), ("ONEBOX_AGENT_TOKEN", self.agent_token),
                                   ("ONEBOX_WATCH_TOKEN", self.watch_token)] if len(v) < 16]
+        if self.capture_token and len(self.capture_token) < 16:
+            missing.append("ONEBOX_CAPTURE_TOKEN")
         if missing:
             raise SystemExit(f"Set these to random strings of 16+ characters: {', '.join(missing)}")
 
@@ -87,6 +92,10 @@ def make_handler(cfg: Config, store: Store):
         def _agent_ok(self) -> bool:
             auth = self.headers.get("Authorization", "")
             return auth.startswith("Bearer ") and _same(auth[7:], cfg.agent_token)
+
+        def _capture_ok(self) -> bool:
+            auth = self.headers.get("Authorization", "")
+            return self._ui_ok() or (auth.startswith("Bearer ") and _same(auth[7:], cfg.capture_token))
 
         def _now(self) -> datetime:
             return datetime.now(cfg.tz)
@@ -143,6 +152,16 @@ def make_handler(cfg: Config, store: Store):
                     if not store.decide(m.group(1), decision):
                         return self._json(409, {"error": "Already sent to Things, or no such item."})
                     return self._json(200, {"ok": True})
+                if path == "/api/capture":
+                    if not self._capture_ok():
+                        return self._send(401)
+                    text = str(self._body().get("text") or "").strip()
+                    if not text or len(text) > MAX_CAPTURE:
+                        return self._json(400, {"error": f"Send 1 to {MAX_CAPTURE} characters of text."})
+                    item = capture_item(text, self._now()).to_dict()
+                    store.upsert_items([item])
+                    return self._json(200, {"ok": True, "id": item["id"], "task": item["task"],
+                                            "message": "Got it. It goes to Things on your next Mac sync."})
                 if path == "/api/ingest":
                     if not self._agent_ok():
                         return self._send(401)

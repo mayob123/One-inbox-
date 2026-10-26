@@ -11,7 +11,7 @@ from onebox.server import Config, make_handler
 from onebox.store import Store
 
 ENV = {"ONEBOX_UI_KEY": "u" * 20, "ONEBOX_AGENT_TOKEN": "a" * 20, "ONEBOX_WATCH_TOKEN": "w" * 20,
-       "ONEBOX_DB": ":memory:"}
+       "ONEBOX_CAPTURE_TOKEN": "c" * 20, "ONEBOX_DB": ":memory:"}
 ITEM = {"id": "0123456789abcdef", "status": "decide", "title": "Your latest bill is here", "task": "Check and pay: Vodafone",
         "area": "Admin & bills", "kind": "bill", "source": "mac", "sender": "Vodafone",
         "received": "2026-10-22T13:18:12+00:00", "why": "No reply found.", "lang": "en", "evidence": []}
@@ -120,6 +120,37 @@ class ServerTests(unittest.TestCase):
         self.assertEqual((f["v"], f["left"], f["done"], f["xp"], f["kind"]), (1, 2, 1, 3, "danish"))
         self.assertLessEqual(len(f["next"]), 20)
         self.assertLess(len(raw), 1024)
+
+    def outbox(self):
+        return json.loads(self.web.req(self.base, "GET", "/api/outbox", headers=self.agent)[1])["items"]
+
+    def test_auto_items_are_queued_once_and_can_be_unticked(self):
+        auto = dict(ITEM, id="fedcba9876543210", title="Ny besked", task="Read in Aula: Ny besked", auto="things")
+        self.web.req(self.base, "POST", "/api/ingest", {"items": [auto]}, self.agent)
+        self.assertEqual([i["id"] for i in self.outbox()], [auto["id"]])
+        self.store.decide(auto["id"], None)  # Ben unticks it on the page
+        self.web.req(self.base, "POST", "/api/ingest", {"items": [auto]}, self.agent)
+        self.assertEqual(self.outbox(), [])
+
+    def test_capture_needs_ui_cookie_or_capture_token(self):
+        self.assertEqual(self.web.req(self.base, "POST", "/api/capture", {"text": "Buy milk"})[0], 401)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/capture", {"text": "Buy milk"},
+                                      {"Authorization": "Bearer " + "w" * 20})[0], 401)
+        code, raw = self.web.req(self.base, "POST", "/api/capture", {"text": "Ring the tandlæge"},
+                                 {"Authorization": "Bearer " + "c" * 20})
+        self.assertEqual(code, 200)
+        self.web.req(self.base, "POST", "/login", form={"key": "u" * 20})
+        self.assertEqual(self.web.req(self.base, "POST", "/api/capture", {"text": "Buy milk"})[0], 200)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/capture", {"text": "  "})[0], 400)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/capture", {"text": "x" * 501})[0], 400)
+        out = {i["task"]: i for i in self.outbox()}
+        self.assertEqual(set(out), {"Ring the tandlæge", "Buy milk"})
+        self.assertEqual(out["Ring the tandlæge"]["area"], "Admin & bills")
+
+    def test_capture_token_is_optional(self):
+        Config({k: v for k, v in ENV.items() if k != "ONEBOX_CAPTURE_TOKEN"})
+        with self.assertRaises(SystemExit):
+            Config(dict(ENV, ONEBOX_CAPTURE_TOKEN="short"))
 
 
 if __name__ == "__main__":

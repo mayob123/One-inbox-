@@ -49,6 +49,10 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 .empty { padding: 16px 0; color: var(--muted); }
 .status { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px max(16px, env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   background: var(--bg); border-top: 1px solid var(--line); font-size: 14px; color: var(--muted); text-align: center; }
+.capture { display: flex; gap: 8px; }
+.capture input { flex: 1; min-width: 0; font: 16px system-ui, sans-serif; min-height: 44px; padding: 0 12px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--fg); }
+.capture input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 details summary { cursor: pointer; font-weight: 700; min-height: 44px; display: flex; align-items: center; }
 </style>
 </head>
@@ -59,6 +63,12 @@ details summary { cursor: pointer; font-weight: 700; min-height: 44px; display: 
     <h1 id="headline">Loading…</h1>
     <div class="stats" id="stats"></div>
   </header>
+
+  <form class="capture" id="capture" autocomplete="off">
+    <label for="captureText" style="position:absolute;left:-9999px">Add a to-do</label>
+    <input id="captureText" maxlength="500" placeholder="Add a to-do, e.g. Sign Aula form for Friday" enterkeyhint="done">
+    <button type="submit" class="primary">Add</button>
+  </form>
 
   <section>
     <h2>Needs your call</h2>
@@ -99,10 +109,22 @@ async function decide(id, decision) {
   load();
 }
 
+$('capture').onsubmit = async e => {
+  e.preventDefault();
+  const box = $('captureText'), text = box.value.trim();
+  if (!text) return;
+  const r = await fetch('/api/capture', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+  if (r.status === 401) { location.reload(); return; }
+  if (!r.ok) { say('Could not add that. Try a shorter line.'); return; }
+  box.value = '';
+  say((await r.json()).message);
+  load();
+};
+
 function card(it) {
   const c = el('article', 'card' + (it.decision ? ' decided' : ''));
   const meta = el('div', 'meta');
-  meta.append(el('span', 'chip', it.lang === 'da' ? 'Danish' : (it.source || 'Mail')), el('span', 'chip plain', it.area), el('span', null, (it.sender || '') + ' · ' + when(it.received)));
+  meta.append(el('span', 'chip', it.source === 'capture' ? 'You added' : it.lang === 'da' ? 'Danish' : (it.source || 'Mail')), el('span', 'chip plain', it.area), el('span', null, (it.sender || '') + ' · ' + when(it.received)));
   c.append(meta, el('div', 'title', it.title), el('div', 'why', it.why), el('div', 'task', 'Task: ' + it.task));
   const acts = el('div', 'actions');
   if (it.in_things) { acts.append(el('span', 'muted', 'In Things')); }
