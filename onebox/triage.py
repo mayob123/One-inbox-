@@ -25,7 +25,8 @@ NOISE_LOCALPARTS = {"newsletter", "news", "marketing", "promo", "offers", "hi", 
 NOISE_SUBJECT = re.compile(
     r"\b(sale|% off|discount|tilbud|nyhedsbrev|newsletter|webinar|early access|"
     r"price drop|wishlist|editor.s choice|briefing|advent calendar|is hiring|"
-    r"search appearances|terms and conditions)\b",
+    r"search appearances|terms and conditions|looking for a new job|have you applied for this job|"
+    r"is looking for an?)\b",
     re.I,
 )
 # Companies that only ever send promotions. Matched against the sender's name or domain.
@@ -286,6 +287,7 @@ def triage(messages: list[Message]) -> list[Item]:
     """Turn mail headers into triage items. Sent mail is only used as evidence."""
     inbound = sorted((m for m in messages if not m.is_sent), key=lambda m: m.received)
     sent = [m for m in messages if m.is_sent]
+    latest = {(normalize_subject(m.subject), m.sender_addr.lower()): m for m in inbound}  # newest wins
     items = []
     for msg in inbound:
         area, kind = classify_area(msg)
@@ -320,6 +322,10 @@ def triage(messages: list[Message]) -> list[Item]:
         evidence = find_done_evidence(msg, sent + inbound)
         if evidence:
             items.append(Item(status="done", why=" ".join(evidence), evidence=evidence, **base))
+            continue
+        key = (normalize_subject(msg.subject), msg.sender_addr.lower())
+        if key in latest and latest[key] is not msg:
+            items.append(Item(status="info", why="An earlier copy of a newer email.", **base))
             continue
         why = "No reply or confirmation found yet."
         if base["lang"] == "da":

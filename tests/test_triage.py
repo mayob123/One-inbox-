@@ -121,3 +121,11 @@ class FilterTests(unittest.TestCase):
 
     def test_school_welcome_is_not_hidden(self):
         self.assertEqual(self.status("Welcome evening for parents", "noreply@aula.dk", "Aula"), "decide")
+
+    def test_duplicate_keeps_only_newest(self):
+        items = triage([msg("Start Date", "enrol@york.ac.uk", days=0, mid="a"),
+                        msg("Start Date", "enrol@york.ac.uk", days=1, mid="b")])
+        self.assertEqual([i.status for i in items], ["info", "decide"])
+
+    def test_job_ads_are_folded(self):
+        self.assertEqual(self.status("Ben, looking for a new job?", "jobs@linkedin.com", "LinkedIn"), "noise")
