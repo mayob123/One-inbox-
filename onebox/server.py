@@ -97,6 +97,13 @@ def make_handler(cfg: Config, store: Store):
             auth = self.headers.get("Authorization", "")
             return self._ui_ok() or (auth.startswith("Bearer ") and _same(auth[7:], cfg.capture_token))
 
+        def _todo_ok(self) -> bool:
+            """The watch (feed token), the phone (capture token) or the page (cookie)."""
+            return _same(self.headers.get("X-OneInbox-Token", ""), cfg.watch_token) or self._capture_ok()
+
+        def _todo_state(self) -> dict:
+            return store.todo_state(self._now().date().isoformat())
+
         def _now(self) -> datetime:
             return datetime.now(cfg.tz)
 
@@ -111,7 +118,7 @@ def make_handler(cfg: Config, store: Store):
                     return self._send(401)
                 status = store.get_meta("things_status", {})
                 make = feed.build if path == "/feed/watch.json" else feed.today
-                return self._json(200, make(status, store.xp(), self._now()))
+                return self._json(200, make(status, store.xp(), self._now(), self._todo_state()))
             if path == "/":
                 if not self._ui_ok():
                     return self._send(200, (WEB_DIR / "login.html").read_bytes(), "text/html; charset=utf-8")
@@ -129,6 +136,10 @@ def make_handler(cfg: Config, store: Store):
                 if not self._agent_ok():
                     return self._send(401)
                 return self._json(200, {"items": store.outbox()})
+            if path == "/api/todo/outbox":
+                if not self._agent_ok():
+                    return self._send(401)
+                return self._json(200, {"ids": store.todo_outbox()})
             return self._send(404)
 
         def do_POST(self):
@@ -167,6 +178,21 @@ def make_handler(cfg: Config, store: Store):
                     if not self._ui_ok():
                         return self._send(401)
                     return self._json(200, {"ok": store.unquiet(str(self._body().get("sender", "")))})
+                m = re.fullmatch(r"/api/todo/(done|skip)", path)
+                if m:
+                    if not self._todo_ok():
+                        return self._send(401)
+                    uuid = str(self._body().get("id") or "")
+                    rows = store.get_meta("things_status", {}).get("today") or []
+                    if uuid not in {r.get("id") for r in rows}:
+                        return self._json(404, {"error": "Not in today's Things list."})
+                    store.todo_action(uuid, m.group(1), self._now().date().isoformat())
+                    status = store.get_meta("things_status", {})
+                    return self._json(200, {"ok": True, **feed.build(status, store.xp(), self._now(), self._todo_state())})
+                if path == "/api/todo/ack":
+                    if not self._agent_ok():
+                        return self._send(401)
+                    return self._json(200, {"ok": True, "acked": store.ack_todos(self._body().get("ids", []))})
                 if path == "/api/ingest":
                     if not self._agent_ok():
                         return self._send(401)
