@@ -143,6 +143,10 @@ def make_handler(cfg: Config, store: Store):
                     if not store.decide(m.group(1), decision):
                         return self._json(409, {"error": "Already sent to Things, or no such item."})
                     return self._json(200, {"ok": True})
+                if path == "/api/quiet/remove":
+                    if not self._ui_ok():
+                        return self._send(401)
+                    return self._json(200, {"ok": store.unquiet(str(self._body().get("sender", "")))})
                 if path == "/api/ingest":
                     if not self._agent_ok():
                         return self._send(401)

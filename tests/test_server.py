@@ -102,6 +102,18 @@ class ServerTests(unittest.TestCase):
         self.ingest()
         self.assertEqual(self.store.items()[0]["decision"], "later")
 
+    def test_no_action_needed_learns_the_sender(self):
+        newer = {**ITEM, "id": "fedcba9876543210", "from_addr": "billing@vodafone.dk", "title": "Next bill"}
+        first = {**ITEM, "from_addr": "billing@vodafone.dk"}
+        self.web.req(self.base, "POST", "/api/ingest", {"items": [first]}, self.agent)
+        self.web.req(self.base, "POST", "/login", form={"key": "u" * 20})
+        self.web.req(self.base, "POST", f"/api/items/{ITEM['id']}/decision", {"decision": "none"})
+        self.web.req(self.base, "POST", "/api/ingest", {"items": [first, newer]}, self.agent)
+        self.assertEqual({i["status"] for i in self.store.items()}, {"noise"})
+        code, _ = self.web.req(self.base, "POST", "/api/quiet/remove", {"sender": "billing@vodafone.dk"})
+        self.assertEqual(code, 200)
+        self.assertEqual({i["status"] for i in self.store.items()}, {"decide"})
+
     def test_bad_decision_is_400(self):
         self.ingest()
         self.web.req(self.base, "POST", "/login", form={"key": "u" * 20})

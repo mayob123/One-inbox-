@@ -157,6 +157,7 @@ class Item:
     why: str
     lang: str = "en"
     evidence: list = field(default_factory=list)
+    from_addr: str = ""  # sender's address, used to remember "no action needed"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -295,7 +296,7 @@ def triage(messages: list[Message]) -> list[Item]:
             id=item_id(msg), title=msg.subject or "(no subject)", task=suggest_task(msg, kind),
             area=area, kind=kind, source=msg.account or "mail",
             sender=msg.sender_name or msg.sender_addr, received=msg.received.isoformat(),
-            lang=language(msg),
+            lang=language(msg), from_addr=msg.sender_addr.lower(),
         )
         scam = is_scam(msg)
         if scam:

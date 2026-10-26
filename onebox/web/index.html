@@ -85,7 +85,7 @@ details summary { cursor: pointer; font-weight: 700; min-height: 44px; display: 
 <div class="status" id="status" role="status" aria-live="polite">Picks marked Add go to Things on your next Mac sync.</div>
 
 <script>
-const LABELS = [['add', 'Add to Things'], ['done', 'Already done'], ['later', 'Later'], ['skip', 'Not mine']];
+const LABELS = [['add', 'Add to Things'], ['done', 'Already done'], ['none', 'No action needed']];
 const $ = id => document.getElementById(id);
 function el(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
 function when(iso) { try { return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }); } catch (e) { return ''; } }
@@ -95,7 +95,15 @@ async function decide(id, decision) {
   const r = await fetch('/api/items/' + id + '/decision', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision }) });
   if (r.status === 401) { location.reload(); return; }
   if (!r.ok) { say('Could not save that. It may already be in Things.'); return; }
-  say(decision === 'add' ? 'Queued. Your Mac adds it to Things on its next sync.' : 'Saved.');
+  say(decision === 'add' ? 'Queued. Your Mac adds it to Things on its next sync.'
+    : decision === 'none' ? 'Got it. Emails from this sender will be folded away from now on.' : 'Saved.');
+  load();
+}
+
+async function unquiet(sender) {
+  const r = await fetch('/api/quiet/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sender }) });
+  if (r.status === 401) { location.reload(); return; }
+  say('OK, emails from this sender will ask you again.');
   load();
 }
 
@@ -120,7 +128,16 @@ function card(it) {
 function rows(box, list, empty) {
   box.textContent = '';
   if (!list.length) { box.append(el('div', 'empty', empty)); return; }
-  list.forEach(it => { const r = el('div', 'row'); r.append(el('strong', null, it.title), el('small', null, (it.sender || '') + ' · ' + when(it.received) + ' · ' + it.why)); box.append(r); });
+  list.forEach(it => {
+    const r = el('div', 'row');
+    r.append(el('strong', null, it.title), el('small', null, (it.sender || '') + ' · ' + when(it.received) + ' · ' + it.why));
+    if (it.quiet) {
+      const b = el('button', null, 'Ask me again');
+      b.type = 'button'; b.style.alignSelf = 'flex-start'; b.onclick = () => unquiet(it.quiet);
+      r.append(b);
+    }
+    box.append(r);
+  });
 }
 
 async function load() {
@@ -134,7 +151,7 @@ async function load() {
   const stats = $('stats'); stats.textContent = '';
   [[open.length, 'to decide'], [by('done').length, 'look done'], [by('scam').length, 'likely scams'], [by('noise').length, 'newsletters skipped'], [data.xp, 'XP']].forEach(([n, l]) => stats.append(el('span', 'stat', n + ' ' + l)));
   const d = $('decide'); d.textContent = '';
-  const decideItems = by('decide').sort((a, b) => (!!a.decision - !!b.decision) || b.received.localeCompare(a.received));
+  const decideItems = by('decide').filter(i => i.decision !== 'none').sort((a, b) => (!!a.decision - !!b.decision) || b.received.localeCompare(a.received));
   if (!decideItems.length) d.append(el('div', 'empty', 'Nothing waiting.'));
   decideItems.forEach(it => d.append(card(it)));
   rows($('done'), by('done'), 'Nothing yet.');
