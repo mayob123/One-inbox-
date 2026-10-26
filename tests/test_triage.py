@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from onebox.triage import Message, is_scam, normalize_subject, triage
+from onebox.triage import Message, capture_item, is_scam, normalize_subject, triage
 
 T0 = datetime(2026, 10, 14, 9, 0, tzinfo=timezone.utc)
 
@@ -85,6 +85,30 @@ class TriageTests(unittest.TestCase):
         b = triage([msg("Hello", "a@b.dk", mid="x1")])[0].id
         self.assertEqual(a, b)
         self.assertRegex(a, r"^[0-9a-f]{16}$")
+
+    def test_official_post_goes_straight_to_things(self):
+        items = by_title(triage([
+            msg("Du har modtaget ny post", "noreply@e-boks.dk", "e-Boks"),
+            msg("Ny besked fra Lærer", "noreply@aula.dk", "Aula", days=1),
+            msg("Du har modtaget Digital Post", "noreply@mit.dk", "Digital Post", days=1),
+        ], now=T0 + timedelta(days=2)))
+        for title, where in [("Du har modtaget ny post", "e-Boks"), ("Ny besked fra Lærer", "Aula"),
+                             ("Du har modtaget Digital Post", "Digital Post")]:
+            self.assertEqual((items[title].status, items[title].auto), ("decide", "things"), title)
+            self.assertTrue(items[title].task.startswith(f"Read in {where}:"))
+
+    def test_old_or_lookalike_official_post_is_not_auto_added(self):
+        items = by_title(triage([
+            msg("Ny besked", "noreply@aula.dk", "Aula"),
+            msg("Du har ny post i e-Boks", "info@eboks-dk.com", "e-Boks"),
+        ], now=T0 + timedelta(days=10)))
+        self.assertEqual((items["Ny besked"].status, items["Ny besked"].auto), ("decide", ""))
+        self.assertEqual(items["Du har ny post i e-Boks"].status, "scam")
+
+    def test_capture_item(self):
+        it = capture_item("  Sign the  Aula form for Friday ", T0)
+        self.assertEqual((it.title, it.kind, it.auto, it.source), ("Sign the Aula form for Friday", "school", "things", "capture"))
+        self.assertNotEqual(it.id, capture_item("Sign the Aula form for Friday", T0 + timedelta(seconds=1)).id)
 
 
 if __name__ == "__main__":
