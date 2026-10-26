@@ -71,6 +71,16 @@ details summary { cursor: pointer; font-weight: 700; min-height: 44px; display: 
   </form>
 
   <section>
+    <h2 id="todayTitle">Today in Things</h2>
+    <div class="panel" id="today"></div>
+  </section>
+
+  <section>
+    <h2>Coming up</h2>
+    <div class="panel" id="events"></div>
+  </section>
+
+  <section>
     <h2>Needs your call</h2>
     <div id="decide" style="display:flex;flex-direction:column;gap:12px"></div>
   </section>
@@ -162,6 +172,37 @@ function rows(box, list, empty) {
   });
 }
 
+const KIND_NAMES = { bill: 'Bill', school: 'School', admin: 'Admin', msc: 'MSc', job: 'Job', danish: 'Danish', friend: 'Friends', travel: 'Travel' };
+
+function todayList(things) {
+  const box = $('today'); box.textContent = '';
+  const list = things.today || [];
+  $('todayTitle').textContent = 'Today in Things' + (things.left ? ' (' + things.left + ' left)' : '');
+  if (!list.length) { box.append(el('div', 'empty', things.at ? 'Nothing left today. Nice.' : 'Waiting for the first Mac sync.')); return; }
+  list.forEach(it => {
+    const r = el('div', 'row');
+    const meta = [KIND_NAMES[it.kind], it.due ? 'due ' + when(it.due) : null].filter(Boolean).join(' · ');
+    r.append(el('strong', null, it.title));
+    if (meta) r.append(el('small', null, meta));
+    box.append(r);
+  });
+  if (things.left > list.length) box.append(el('div', 'empty', '…and ' + (things.left - list.length) + ' more in Things.'));
+}
+
+function eventList(events) {
+  const box = $('events'); box.textContent = '';
+  const now = Date.now();
+  const soon = (events || []).filter(e => new Date(e.start).getTime() > now);
+  if (!soon.length) { box.append(el('div', 'empty', 'Nothing in your calendar for the next two days.')); return; }
+  soon.forEach(e => {
+    const r = el('div', 'row');
+    const t = new Date(e.start);
+    const day = t.toDateString() === new Date().toDateString() ? 'Today' : t.toLocaleDateString(undefined, { weekday: 'short' });
+    r.append(el('strong', null, e.title), el('small', null, day + ' ' + t.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })));
+    box.append(r);
+  });
+}
+
 async function load() {
   const r = await fetch('/api/items');
   if (r.status === 401) { location.reload(); return; }
@@ -172,6 +213,8 @@ async function load() {
   $('sync').textContent = 'One Inbox · ' + (data.last_sync ? 'synced ' + new Date(data.last_sync).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : 'waiting for first Mac sync');
   const stats = $('stats'); stats.textContent = '';
   [[open.length, 'to decide'], [by('done').length, 'look done'], [by('scam').length, 'likely scams'], [by('noise').length, 'newsletters skipped'], [data.xp, 'XP']].forEach(([n, l]) => stats.append(el('span', 'stat', n + ' ' + l)));
+  todayList(data.things || {});
+  eventList((data.things || {}).events);
   const d = $('decide'); d.textContent = '';
   const decideItems = by('decide').filter(i => i.decision !== 'none').sort((a, b) => (!!a.decision - !!b.decision) || b.received.localeCompare(a.received));
   if (!decideItems.length) d.append(el('div', 'empty', 'Nothing waiting.'));
