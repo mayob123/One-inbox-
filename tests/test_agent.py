@@ -134,6 +134,13 @@ class AgentTests(unittest.TestCase):
         self.assertTrue(url.startswith("things:///json?data="))
         data = json.loads(urllib.parse.unquote(url.split("=", 1)[1]))
         self.assertEqual(data[0]["attributes"]["title"], "Pay & check")
+        self.assertNotIn("when", data[0]["attributes"])
+
+    def test_auto_items_go_to_today(self):
+        url = agent.things_add_url([{"task": "Read in Aula: Ny besked", "title": "Ny besked", "sender": "Aula",
+                                     "received": "2026-10-22T00:00:00", "auto": "things"}])
+        data = json.loads(urllib.parse.unquote(url.split("=", 1)[1]))
+        self.assertEqual(data[0]["attributes"]["when"], "today")
 
 
 if __name__ == "__main__":

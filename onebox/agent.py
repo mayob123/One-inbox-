@@ -266,14 +266,16 @@ def call(server: str, token: str, method: str, path: str, body: dict | None = No
 
 
 def things_add_url(items: list[dict]) -> str:
-    todos = [{
-        "type": "to-do",
-        "attributes": {
+    todos = []
+    for it in items:
+        attrs = {
             "title": it["task"],
             "notes": f"{it['title']}\nFrom {it.get('sender', '')}, {it['received'][:10]}\n{it.get('why', '')}\n"
                      f"Area: {it.get('area', '')}\n(added by One Inbox)",
-        },
-    } for it in items]
+        }
+        if it.get("auto"):  # e-Boks, Aula and quick captures go to Today, so the watch shows them
+            attrs["when"] = "today"
+        todos.append({"type": "to-do", "attributes": attrs})
     return "things:///json?data=" + urllib.parse.quote(json.dumps(todos))
 
 
@@ -292,8 +294,9 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
     items = []
     if mail_db:
         msgs = read_mail(mail_db, cfg["days"], cfg.get("account_labels"), now)
-        items = [i.to_dict() for i in triage(msgs)]
-        report["mail"] = summary(triage(msgs))
+        triaged = triage(msgs, now)
+        items = [i.to_dict() for i in triaged]
+        report["mail"] = summary(triaged)
     else:
         report["mail"] = "Mail index not found. Is Full Disk Access on?"
     payload: dict = {"items": items}

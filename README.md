@@ -16,10 +16,13 @@ One place for everything that needs Ben: mail, e-Boks and Aula alerts, bills, pl
 
 | Mail that is… | Goes to |
 | --- | --- |
+| An e-Boks, Digital Post or Aula alert | Straight to **Things Today**, so it stays on the watch until done |
 | Needs you (bill, letter, Danish message, invite) | **Needs your call**, with a suggested task |
 | Already handled (you replied, accepted, or a later email confirms it) | **Looks done**, with the evidence |
 | Pretending to be a brand from the wrong domain, or asking for card details | **Likely scams** |
 | Newsletters, receipts, sign-in notices | Folded away |
+
+Anything that isn't an email can be added from the box on the page or from Siri with an iPhone Shortcut ([setup](docs/setup.md#6-capture-anything-that-isnt-an-email)). It goes to Things Today too.
 
 The Pi also serves `/feed/watch.json` for the Pokémon buddy watch face: items left, next item, next bill, XP and the buddy's mood. Contract: [docs/watch-feed.md](docs/watch-feed.md).
 

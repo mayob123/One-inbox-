@@ -10,8 +10,8 @@ install -d -o onebox -g onebox -m 700 /var/lib/onebox
 install -d /opt/one-inbox
 cp -r onebox /opt/one-inbox/
 
+gen() { python3 -c 'import secrets; print(secrets.token_urlsafe(24))'; }
 if [ ! -f /etc/onebox.env ]; then
-  gen() { python3 -c 'import secrets; print(secrets.token_urlsafe(24))'; }
   cat > /etc/onebox.env <<ENV
 ONEBOX_DB=/var/lib/onebox/onebox.sqlite3
 ONEBOX_HOST=0.0.0.0
@@ -23,6 +23,10 @@ ONEBOX_WATCH_TOKEN=$(gen)
 ENV
   chmod 600 /etc/onebox.env
   echo "Created /etc/onebox.env with new keys. Read them with: sudo cat /etc/onebox.env"
+fi
+if ! grep -q '^ONEBOX_CAPTURE_TOKEN=' /etc/onebox.env; then
+  echo "ONEBOX_CAPTURE_TOKEN=$(gen)" >> /etc/onebox.env
+  echo "Added ONEBOX_CAPTURE_TOKEN for the iPhone Shortcut. Read it with: sudo cat /etc/onebox.env"
 fi
 
 install -m 644 deploy/onebox.service /etc/systemd/system/onebox.service
