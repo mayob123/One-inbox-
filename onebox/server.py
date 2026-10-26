@@ -97,11 +97,12 @@ def make_handler(cfg: Config, store: Store):
             path = url.path
             if path == "/healthz":
                 return self._json(200, {"ok": True})
-            if path == "/feed/watch.json":
+            if path in ("/feed/watch.json", "/feed/today.json"):
                 if not _same(self.headers.get("X-OneInbox-Token", ""), cfg.watch_token):
                     return self._send(401)
                 status = store.get_meta("things_status", {})
-                return self._json(200, feed.build(status, store.xp(), self._now()))
+                make = feed.build if path == "/feed/watch.json" else feed.today
+                return self._json(200, make(status, store.xp(), self._now()))
             if path == "/":
                 if not self._ui_ok():
                     return self._send(200, (WEB_DIR / "login.html").read_bytes(), "text/html; charset=utf-8")

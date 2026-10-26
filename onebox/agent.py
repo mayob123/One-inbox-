@@ -115,6 +115,9 @@ def kind_of(*texts: str) -> str:
     return "other"
 
 
+TODAY_MAX = 40  # enough for any real Today list, and keeps the phone feed small
+
+
 def things_status(db_path: str, now: datetime) -> dict:
     today = now.date()
     t_today = things_date(today)
@@ -160,6 +163,9 @@ def things_status(db_path: str, now: datetime) -> dict:
             bill = d.strftime("%a") if 0 <= (d - today).days < 7 else d.strftime("%-d %b")
             break
     first = open_today[0] if open_today else None
+    today_list = [{"title": t["title"], "kind": kind_of(t["title"], t["area"], t["project"]),
+                   "due": from_things_date(t["deadline"]).isoformat() if t["deadline"] else None}
+                  for t in open_today[:TODAY_MAX]]
     return {
         "at": now.isoformat(timespec="seconds"),
         "left": len(open_today),
@@ -169,6 +175,7 @@ def things_status(db_path: str, now: datetime) -> dict:
         "next": first["title"] if first else None,
         "next_kind": kind_of(first["title"], first["area"], first["project"]) if first else None,
         "bill": bill,
+        "today": today_list,
     }
 
 

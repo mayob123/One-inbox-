@@ -38,3 +38,22 @@ Agreed 2026-10-26 between One Inbox (the Pi side) and the Pokémon buddy watch f
 | `mood` | string | `happy` (left = 0), `normal`, `hungry` (anything overdue), `lonely` (friend overdue, nothing else overdue), `sleepy` (after 22:00 with left > 0). First match in order: hungry, lonely, sleepy, happy, normal. |
 
 Unknown fields must be ignored by the watch, so new fields can be added without breaking it.
+
+## Phone feed: `/feed/today.json`
+
+Added 2026-10-26 for the Pocket Pal iPhone app, which shows the whole Today list. Same header and token as the watch feed. The body is the watch feed plus `items`, every open item in Things Today in Today order (at most 40):
+
+```json
+{ "...": "the watch fields above", "items": [
+  { "title": "A-kasse hours", "kind": "admin", "due": null },
+  { "title": "Pay the electricity bill", "kind": "bill", "due": "2026-10-30" }
+] }
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `items[].title` | string | Up to 80 characters, cut with "…". |
+| `items[].kind` | string | As `kind` above. |
+| `items[].due` | string or null | The Things deadline as `YYYY-MM-DD`. |
+
+The watch keeps using `/feed/watch.json`, which stays under 1 KB for the Garmin's memory. The list needs the Mac agent from this change too (it reports `today`); until it runs, `items` is empty.

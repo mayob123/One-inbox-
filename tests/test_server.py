@@ -133,6 +133,17 @@ class ServerTests(unittest.TestCase):
         self.assertLessEqual(len(f["next"]), 20)
         self.assertLess(len(raw), 1024)
 
+    def test_today_feed_lists_every_item(self):
+        self.assertEqual(self.web.req(self.base, "GET", "/feed/today.json")[0], 401)
+        items = [{"title": f"Item {i}", "kind": "admin", "due": None} for i in range(12)]
+        self.ingest(things={"left": 12, "next": "Item 0", "next_kind": "admin", "today": items,
+                            "at": "2026-10-26T07:30:00+01:00"})
+        code, raw = self.web.req(self.base, "GET", "/feed/today.json", headers={"X-OneInbox-Token": "w" * 20})
+        self.assertEqual(code, 200)
+        self.assertEqual([i["title"] for i in json.loads(raw)["items"]], [f"Item {i}" for i in range(12)])
+        _, watch = self.web.req(self.base, "GET", "/feed/watch.json", headers={"X-OneInbox-Token": "w" * 20})
+        self.assertNotIn("items", json.loads(watch))
+
 
 if __name__ == "__main__":
     unittest.main()

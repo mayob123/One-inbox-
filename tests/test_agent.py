@@ -89,6 +89,9 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(s["done_today"], 1)
         self.assertEqual(s["completed_ids"], ["t5"])
         self.assertEqual(s["bill"], (NOW.date() + timedelta(days=3)).strftime("%a"))
+        self.assertEqual([t["title"] for t in s["today"]][0], "Danish homework, chapter 4")
+        self.assertEqual(len(s["today"]), 2)
+        self.assertEqual(s["today"][0]["kind"], "danish")
 
     def test_dry_run_end_to_end(self):
         report = agent.run_once({"mail_db": self.mail, "things_db": self.things, "days": 21,
