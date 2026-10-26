@@ -25,7 +25,7 @@ The Pi also serves `/feed/watch.json` for the Pokémon buddy watch face: items l
 
 ## Set up
 
-See [docs/setup.md](docs/setup.md): Pi install script, Pi-hole name, Tailscale HTTPS, Mac agent.
+See [docs/setup.md](docs/setup.md): Pi install script, Pi-hole name, Tailscale HTTPS, Mac agent. No internet on the Pi network? Use [docs/offline-setup.md](docs/offline-setup.md), which also covers fixing a Pi-hole that blocks all traffic.
 
 ## Develop
 
