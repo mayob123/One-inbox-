@@ -1,11 +1,12 @@
 """The small JSON feed the Garmin buddy watch face reads.
 
 Contract: docs/watch-feed.md. Keep it additive: never rename or remove a field.
+The phone also gets the whole Today list (today()); the watch feed stays small for the Garmin's memory.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 FEED_VERSION = 1
 NEXT_MAX = 20
@@ -32,10 +33,25 @@ def mood(left: int, overdue: int, friends_overdue: int, now: datetime) -> str:
     return "normal"
 
 
+def next_event(events: list[dict], now: datetime) -> tuple[str | None, str | None]:
+    """The first event that hasn't started yet, within 24 h: ("Lecture", "14:00") or ("Dentist", "Tue 09:00")."""
+    now = now if now.tzinfo else now.astimezone()
+    for e in events or []:
+        try:
+            start = datetime.fromisoformat(e["start"]).astimezone(now.tzinfo)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if now <= start < now + timedelta(hours=24):
+            at = start.strftime("%H:%M") if start.date() == now.date() else start.strftime("%a %H:%M")
+            return short(e.get("title")), at
+    return None, None
+
+
 def build(status: dict, xp: int, now: datetime) -> dict:
     """status comes from the Mac agent's last report (see agent.things_status)."""
     left = int(status.get("left", 0))
     kind = status.get("next_kind")
+    event, event_at = next_event(status.get("events", []), now)
     return {
         "v": FEED_VERSION,
         "at": status.get("at") or now.isoformat(timespec="seconds"),
@@ -46,4 +62,21 @@ def build(status: dict, xp: int, now: datetime) -> dict:
         "kind": kind if kind in KINDS else (None if not status.get("next") else "other"),
         "bill": status.get("bill"),
         "mood": mood(left, int(status.get("overdue", 0)), int(status.get("friends_overdue", 0)), now),
+        "event": event,
+        "event_at": event_at,
     }
+
+
+TITLE_MAX = 80
+
+
+def today(status: dict, xp: int, now: datetime) -> dict:
+    """The watch feed plus every open item in Things Today, for the Pocket Pal phone app."""
+    items = []
+    for it in status.get("today") or []:
+        title = short(it.get("title"), TITLE_MAX)
+        if not title:
+            continue
+        kind = it.get("kind")
+        items.append({"title": title, "kind": kind if kind in KINDS else "other", "due": it.get("due")})
+    return {**build(status, xp, now), "items": items}

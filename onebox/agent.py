@@ -4,6 +4,7 @@ Each run it:
   1. reads mail headers from Mail's local index (read-only, no bodies),
   2. sorts them (triage.py) and sends the result to the Pi,
   3. reads Things 3 (read-only) for today's count, next item, bills and XP,
+     and Calendar (read-only) for the next few events,
   4. adds anything Ben marked "Add" on his phone to Things, via the Things URL scheme,
   5. adds study sessions and deadlines from his calendar feeds to Things (studycal.py),
   6. mirrors the job tracker's Apply next list and interviews into Things (jobtrack.py).
@@ -33,6 +34,11 @@ MAIL_GLOB = str(HOME / "Library/Mail/V*/MailData/Envelope Index")
 THINGS_GLOB = str(HOME / "Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-*/"
                   "Things Database.thingsdatabase/main.sqlite")
 MESSAGES_DB = str(HOME / "Library/Messages/chat.db")
+CALENDAR_DBS = (  # newer macOS first
+    str(HOME / "Library/Group Containers/group.com.apple.calendar/Calendar.sqlitedb"),
+    str(HOME / "Library/Calendars/Calendar.sqlitedb"),
+)
+CALENDAR_SKIP = ("Birthdays", "Fødselsdage", "Holidays in Denmark", "Helligdage i Danmark", "Siri Suggestions")
 CONFIG_PATH = Path(os.environ.get("ONEBOX_AGENT_CONFIG", HOME / ".config/onebox/agent.json"))
 CALENDAR_SEEN = CONFIG_PATH.parent / "calendar-seen.json"
 JOBS_SEEN = CONFIG_PATH.parent / "jobs-seen.json"
@@ -120,6 +126,9 @@ def kind_of(*texts: str) -> str:
     return "other"
 
 
+TODAY_MAX = 40  # enough for any real Today list, and keeps the phone feed small
+
+
 def things_status(db_path: str, now: datetime) -> dict:
     today = now.date()
     t_today = things_date(today)
@@ -165,6 +174,9 @@ def things_status(db_path: str, now: datetime) -> dict:
             bill = d.strftime("%a") if 0 <= (d - today).days < 7 else d.strftime("%-d %b")
             break
     first = open_today[0] if open_today else None
+    today_list = [{"title": t["title"], "kind": kind_of(t["title"], t["area"], t["project"]),
+                   "due": from_things_date(t["deadline"]).isoformat() if t["deadline"] else None}
+                  for t in open_today[:TODAY_MAX]]
     return {
         "at": now.isoformat(timespec="seconds"),
         "left": len(open_today),
@@ -174,7 +186,54 @@ def things_status(db_path: str, now: datetime) -> dict:
         "next": first["title"] if first else None,
         "next_kind": kind_of(first["title"], first["area"], first["project"]) if first else None,
         "bill": bill,
+        "today": today_list,
     }
+
+
+# --- Calendar ------------------------------------------------------------
+
+def next_events(db_path: str, now: datetime, hours: int = 48, skip: tuple = CALENDAR_SKIP,
+                limit: int = 5) -> list[dict]:
+    """Timed events starting in the next `hours`, soonest first. Repeating events come from
+    Calendar's own occurrence cache. All-day events and skipped calendars are left out."""
+    start = (now - APPLE_EPOCH).total_seconds()
+    con = ro_connect(db_path)
+    try:
+        rows = con.execute(
+            """SELECT ci.summary AS title, COALESCE(oc.occurrence_start_date, oc.occurrence_date) AS start,
+                      COALESCE(c.title, '') AS calendar
+               FROM OccurrenceCache oc
+               JOIN CalendarItem ci ON ci.ROWID = oc.event_id
+               LEFT JOIN Calendar c ON c.ROWID = ci.calendar_id
+               WHERE COALESCE(ci.all_day, 0) = 0
+                 AND COALESCE(oc.occurrence_start_date, oc.occurrence_date) >= ?
+                 AND COALESCE(oc.occurrence_start_date, oc.occurrence_date) < ?
+               ORDER BY 2""",
+            (start, start + hours * 3600),
+        ).fetchall()
+    finally:
+        con.close()
+    out, seen = [], set()
+    for r in rows:
+        if not r["title"] or r["calendar"] in skip or (r["title"], r["start"]) in seen:
+            continue
+        seen.add((r["title"], r["start"]))
+        when = (APPLE_EPOCH + timedelta(seconds=r["start"])).astimezone(now.tzinfo)
+        out.append({"title": r["title"], "start": when.isoformat(timespec="minutes")})
+        if len(out) == limit:
+            break
+    return out
+
+
+def read_calendar(cfg: dict, now: datetime) -> tuple[list[dict], str]:
+    path = cfg.get("calendar_db") or next((p for p in CALENDAR_DBS if os.path.exists(p)), None)
+    if not path:
+        return [], "Calendar database not found. Is Full Disk Access on?"
+    try:
+        events = next_events(path, now, skip=tuple(cfg.get("calendar_skip", CALENDAR_SKIP)))
+    except sqlite3.Error as e:  # Apple changes this schema now and then; never let it stop a sync
+        return [], f"Could not read Calendar: {e}"
+    return events, f"{len(events)} events in the next 48 h"
 
 
 # --- Friends (Messages) ---------------------------------------------------
@@ -257,6 +316,7 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
     if things_db:
         status = things_status(things_db, now)
         status["friends_overdue"] = friends_overdue(cfg.get("messages_db", MESSAGES_DB), cfg.get("friends", []), now)
+        status["events"], report["calendar"] = read_calendar(cfg, now)
         payload["things"] = status
         report["things"] = {k: v for k, v in status.items() if k != "completed_ids"}
     if dry_run:

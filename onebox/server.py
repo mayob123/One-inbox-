@@ -106,11 +106,12 @@ def make_handler(cfg: Config, store: Store):
             path = url.path
             if path == "/healthz":
                 return self._json(200, {"ok": True})
-            if path == "/feed/watch.json":
+            if path in ("/feed/watch.json", "/feed/today.json"):
                 if not _same(self.headers.get("X-OneInbox-Token", ""), cfg.watch_token):
                     return self._send(401)
                 status = store.get_meta("things_status", {})
-                return self._json(200, feed.build(status, store.xp(), self._now()))
+                make = feed.build if path == "/feed/watch.json" else feed.today
+                return self._json(200, make(status, store.xp(), self._now()))
             if path == "/":
                 if not self._ui_ok():
                     return self._send(200, (WEB_DIR / "login.html").read_bytes(), "text/html; charset=utf-8")
@@ -162,6 +163,10 @@ def make_handler(cfg: Config, store: Store):
                     store.upsert_items([item])
                     return self._json(200, {"ok": True, "id": item["id"], "task": item["task"],
                                             "message": "Got it. It goes to Things on your next Mac sync."})
+                if path == "/api/quiet/remove":
+                    if not self._ui_ok():
+                        return self._send(401)
+                    return self._json(200, {"ok": store.unquiet(str(self._body().get("sender", "")))})
                 if path == "/api/ingest":
                     if not self._agent_ok():
                         return self._send(401)

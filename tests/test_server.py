@@ -102,6 +102,18 @@ class ServerTests(unittest.TestCase):
         self.ingest()
         self.assertEqual(self.store.items()[0]["decision"], "later")
 
+    def test_no_action_needed_learns_the_sender(self):
+        newer = {**ITEM, "id": "fedcba9876543210", "from_addr": "billing@vodafone.dk", "title": "Next bill"}
+        first = {**ITEM, "from_addr": "billing@vodafone.dk"}
+        self.web.req(self.base, "POST", "/api/ingest", {"items": [first]}, self.agent)
+        self.web.req(self.base, "POST", "/login", form={"key": "u" * 20})
+        self.web.req(self.base, "POST", f"/api/items/{ITEM['id']}/decision", {"decision": "none"})
+        self.web.req(self.base, "POST", "/api/ingest", {"items": [first, newer]}, self.agent)
+        self.assertEqual({i["status"] for i in self.store.items()}, {"noise"})
+        code, _ = self.web.req(self.base, "POST", "/api/quiet/remove", {"sender": "billing@vodafone.dk"})
+        self.assertEqual(code, 200)
+        self.assertEqual({i["status"] for i in self.store.items()}, {"decide"})
+
     def test_bad_decision_is_400(self):
         self.ingest()
         self.web.req(self.base, "POST", "/login", form={"key": "u" * 20})
@@ -121,6 +133,17 @@ class ServerTests(unittest.TestCase):
         self.assertLessEqual(len(f["next"]), 20)
         self.assertLess(len(raw), 1024)
 
+    def test_today_feed_lists_every_item(self):
+        self.assertEqual(self.web.req(self.base, "GET", "/feed/today.json")[0], 401)
+        items = [{"title": f"Item {i}", "kind": "admin", "due": None} for i in range(12)]
+        self.ingest(things={"left": 12, "next": "Item 0", "next_kind": "admin", "today": items,
+                            "at": "2026-10-26T07:30:00+01:00"})
+        code, raw = self.web.req(self.base, "GET", "/feed/today.json", headers={"X-OneInbox-Token": "w" * 20})
+        self.assertEqual(code, 200)
+        self.assertEqual([i["title"] for i in json.loads(raw)["items"]], [f"Item {i}" for i in range(12)])
+        _, watch = self.web.req(self.base, "GET", "/feed/watch.json", headers={"X-OneInbox-Token": "w" * 20})
+        self.assertNotIn("items", json.loads(watch))
+
     def outbox(self):
         return json.loads(self.web.req(self.base, "GET", "/api/outbox", headers=self.agent)[1])["items"]
 
@@ -130,6 +153,14 @@ class ServerTests(unittest.TestCase):
         self.assertEqual([i["id"] for i in self.outbox()], [auto["id"]])
         self.store.decide(auto["id"], None)  # Ben unticks it on the page
         self.web.req(self.base, "POST", "/api/ingest", {"items": [auto]}, self.agent)
+        self.assertEqual(self.outbox(), [])
+
+    def test_quiet_sender_is_not_auto_added(self):
+        first = dict(ITEM, id="1111111111111111", from_addr="noreply@aula.dk", auto="things")
+        self.web.req(self.base, "POST", "/api/ingest", {"items": [first]}, self.agent)
+        self.store.decide(first["id"], "none")  # "No action needed" remembers the sender
+        later = dict(first, id="2222222222222222")
+        self.web.req(self.base, "POST", "/api/ingest", {"items": [later]}, self.agent)
         self.assertEqual(self.outbox(), [])
 
     def test_capture_needs_ui_cookie_or_capture_token(self):

@@ -113,3 +113,43 @@ class TriageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FilterTests(unittest.TestCase):
+    def status(self, subject, addr, name=""):
+        return triage([msg(subject, addr, name)])[0].status
+
+    def test_ci_failure_is_a_notice(self):
+        self.assertEqual(self.status("[mayob123/firered-3ds] Run failed: Test build", "notifications@github.com",
+                                     "mayob123"), "info")
+
+    def test_real_github_action_still_needs_a_call(self):
+        self.assertEqual(self.status("[ACTION REQUIRED] Your GitHub account will soon require 2FA",
+                                     "noreply@github.com", "GitHub"), "decide")
+
+    def test_marketing_is_folded(self):
+        self.assertEqual(self.status("🚨 Sample Thursday is HERE🚨", "hello@pinchme.com", "PINCHme"), "noise")
+        self.assertEqual(self.status("Save 50% on Parallels Desktop", "news@parallels.com", "Parallels"), "noise")
+        self.assertEqual(self.status("You've got $15 credit to spend", "x@wonderbly.com", "Wonderbly"), "noise")
+
+    def test_codes_and_logins_are_security_notices(self):
+        self.assertEqual(self.status("Your one-time code: 834605", "no-reply@strava.com", "Strava"), "info")
+        self.assertEqual(self.status("We noticed a new login", "disney@disneyplus.com", "Disney+"), "info")
+
+    def test_application_acknowledgement_is_a_notice(self):
+        self.assertEqual(self.status("Thank you for your application", "jobs@ms.dk"), "info")
+
+    def test_job_interview_and_bills_still_need_a_call(self):
+        self.assertEqual(self.status("Your Interview tomorrow – Team Lead", "nanna@ms.dk", "Nanna"), "decide")
+        self.assertEqual(self.status("Your latest bill is here Ben", "billing@vodafone.dk", "Vodafone"), "decide")
+
+    def test_school_welcome_is_not_hidden(self):
+        self.assertEqual(self.status("Welcome evening for parents", "noreply@aula.dk", "Aula"), "decide")
+
+    def test_duplicate_keeps_only_newest(self):
+        items = triage([msg("Start Date", "enrol@york.ac.uk", days=0, mid="a"),
+                        msg("Start Date", "enrol@york.ac.uk", days=1, mid="b")])
+        self.assertEqual([i.status for i in items], ["info", "decide"])
+
+    def test_job_ads_are_folded(self):
+        self.assertEqual(self.status("Ben, looking for a new job?", "jobs@linkedin.com", "LinkedIn"), "noise")
