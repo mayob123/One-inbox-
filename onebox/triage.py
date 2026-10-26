@@ -28,13 +28,44 @@ NOISE_SUBJECT = re.compile(
     r"search appearances|terms and conditions)\b",
     re.I,
 )
+# Companies that only ever send promotions. Matched against the sender's name or domain.
+NOISE_SENDERS = {
+    "pinchme", "tracksmith", "parallels", "wonderbly", "nordisk film", "anbernic", "adidas",
+    "snow peak", "analogue", "goodreads", "flare audio", "google health", "st lukes notices",
+    "amazon.de rezensionen", "super duolingo",
+}
+# Marketing wording. Only applied to mail that isn't school, admin, job, bills, etc.
+PROMO_SUBJECT = re.compile(
+    r"(\bfree\b|gift card|\bsamples?\b|save (up to|on|\d)|\d+\s?%|credit to spend|introducing|"
+    r"don.t miss|exclusive|pre-?order|available (now|today)|new arrivals|\bnew!|ever wonder|"
+    r"could be earning|rate (your experience|us)|how would you rate|trustpilot|\bperk\b|"
+    r"looking for a new job|have you applied|is looking for|glip af|forudbestil|unlock|"
+    r"final days|loyalty|join us|cart\b|half stars|connect .* to )",
+    re.I,
+)
+# Automatic notices: worth seeing in the folded list, never a task.
+AUTO_NOTICE = re.compile(
+    r"(run failed|run cancelled|build (failed|passed|succeeded)|workflow run|dependabot|"
+    r"invited you to test|autosvar|auto-?reply|automatic reply|out of office|fraværende|"
+    r"\bwelcome\b|account .*(has been )?created|rental was ended|\bstatement\b|"
+    r"an update (to|on) our|gdpr|sunsetting|sorry to see you go|request received|"
+    r"thank you for (applying|your application|your interest)|tak for din ansøgning|"
+    r"new opportunity at|nouvelle opportunité|church notices|order is complete|"
+    r"handling your personal data|unauthori[sz]ed .* notification)",
+    re.I,
+)
 RECEIPT_SUBJECT = re.compile(
-    r"\b(receipt|kvittering|transaction statement|order confirmation|ordrebekræftelse|"
+    r"\b(receipts?|kvittering|transaction statement|order confirmation|ordrebekræftelse|"
     r"thank you for your .*purchase|tak for din ordre)\b",
     re.I,
 )
-SECURITY_NOTICE = re.compile(r"\b(security alert|new sign-in|passkey was added|ssh .*key was added|"
-                             r"shared some google account data)\b", re.I)
+SECURITY_NOTICE = re.compile(
+    r"\b(security alert|new sign-in|new login|passkey (was added|is now activated)|ssh .*key was added|"
+    r"shared some google account data|one-time code|verification code|verify your email|"
+    r"did you recently sign in|password (change|reset)|reset your .*password|"
+    r"account information has been changed|secure link to)",
+    re.I,
+)
 CONFIRM_SUBJECT = re.compile(
     r"\b(confirm(ed|ation)?|bekræft(else|et)?|receipt|kvittering|registered|registration|"
     r"you have sent|we have received|modtaget)\b",
@@ -161,7 +192,18 @@ def is_noise(msg: Message) -> bool:
         return True
     if local in NOISE_LOCALPARTS:
         return True
+    who = f"{msg.sender_name} {msg.domain}".lower()
+    if any(name in who for name in NOISE_SENDERS):
+        return True
     return bool(NOISE_SUBJECT.search(msg.subject))
+
+
+EMOJI = re.compile("[\U0001F300-\U0001FAFF\u2600-\u27BF]")
+
+
+def is_promo(msg: Message, kind: str) -> bool:
+    """Marketing from a company: emoji or sales wording in a mail that isn't about something we track."""
+    return kind == "other" and bool(PROMO_SUBJECT.search(msg.subject) or EMOJI.search(msg.subject))
 
 
 def classify_area(msg: Message) -> tuple[str, str]:
@@ -263,7 +305,13 @@ def triage(messages: list[Message]) -> list[Item]:
         if is_noise(msg):
             items.append(Item(status="noise", why="Newsletter or promotion.", **base))
             continue
-        if RECEIPT_SUBJECT.search(msg.subject):
+        if is_promo(msg, kind):
+            items.append(Item(status="noise", why="Looks like marketing.", **base))
+            continue
+        if AUTO_NOTICE.search(msg.subject) and kind not in {"school", "admin", "bill", "friend"}:
+            items.append(Item(status="info", why="Automatic notice. Nothing to do.", **base))
+            continue
+        if RECEIPT_SUBJECT.search(f"{msg.sender_name} {msg.subject}"):
             items.append(Item(status="info", why="Receipt. Nothing to do.", **base))
             continue
         if CONFIRM_SUBJECT.search(msg.subject) and not BILL_SUBJECT.search(msg.subject):
