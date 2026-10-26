@@ -62,7 +62,7 @@ RECEIPT_SUBJECT = re.compile(
 )
 SECURITY_NOTICE = re.compile(
     r"\b(security alert|new sign-in|new login|passkey (was added|is now activated)|ssh .*key was added|"
-    r"shared some google account data|one-time code|verification code|verify your email|"
+    r"shared some google account data|one-time code|single-use code|security code|verification code|verify your email|new app(\\(s\\))? connected|"
     r"did you recently sign in|password (change|reset)|reset your .*password|"
     r"account information has been changed|secure link to)",
     re.I,
