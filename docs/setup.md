@@ -137,7 +137,7 @@ The agent reads Calendar.app's database (read-only) for "up next" on the watch. 
 - Stop the Pi server: `sudo systemctl disable --now onebox`
 - Revoke the watch or agent: change the token in `/etc/onebox.env`, then `sudo systemctl restart onebox`
 
-## 7. Study calendar: sessions and deadlines into Things
+## 9. Study calendar: sessions and deadlines into Things
 
 The agent can read your uni calendar feed and put it in Things, so the watch shows it:
 
@@ -160,7 +160,7 @@ Get the feed link from the VLE's calendar (look for **Export calendar**, **Calen
 
 Check what it would add with `python3 -m onebox.agent --dry-run` (see `calendar.would_add`). Each event is added once; the agent remembers them in `~/.config/onebox/calendar-seen.json`. If a session moves, the new time is added as a new to-do; tick off or delete the old one.
 
-## 8. Job tracker: what to apply for next, and interviews
+## 10. Job tracker: what to apply for next, and interviews
 
 If the job tracker app runs on the same Mac, the agent can mirror its **Apply next** list into Things, so job deadlines show in Today and on the watch (as `job`). It opens the tracker's database read-only and changes nothing in it. Nothing from the tracker is sent to the Pi.
 
