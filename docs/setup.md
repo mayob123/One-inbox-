@@ -155,3 +155,32 @@ Get the feed link from the VLE's calendar (look for **Export calendar**, **Calen
 - `deadlines` is for dates that are only in a handbook or an email. Same heads-ups as the feed.
 
 Check what it would add with `python3 -m onebox.agent --dry-run` (see `calendar.would_add`). Each event is added once; the agent remembers them in `~/.config/onebox/calendar-seen.json`. If a session moves, the new time is added as a new to-do; tick off or delete the old one.
+
+## 8. Job tracker: what to apply for next, and interviews
+
+If the job tracker app runs on the same Mac, the agent can mirror its **Apply next** list into Things, so job deadlines show in Today and on the watch (as `job`). It opens the tracker's database read-only and changes nothing in it. Nothing from the tracker is sent to the Pi.
+
+- **A role with a deadline**: "Apply: Company, Role (due Fri 31 Oct)" lands in Today 5 days before, with the Things deadline set, plus a "Last day tomorrow" nudge.
+- **A rolling or starred role**: lands in Today straight away.
+- **Any other role in Apply next** (drafts, strong fits with no date): goes to the list with no date.
+- **An interview**: a to-do that day with a reminder an hour before, and a prep to-do the morning before.
+
+It uses the tracker's own rules, so "More leads", Danish-only roles (unless starred), closed, skipped and passed ones stay out.
+
+Add to `~/.config/onebox/agent.json`:
+
+```json
+"job_tracker": {
+  "db": "~/Documents/job-tracker/data/job_tracker.db",
+  "list": "Job Search",
+  "tracker_url": "http://localhost:8501"
+},
+"things_auth_token": "…"
+```
+
+- `"job_tracker": {}` is enough if the defaults above are right. `list` must match your Things area's name.
+- `things_auth_token` lets the agent tidy up after you. When you mark a role **Applied** in the tracker (or it gets to interview), its to-do is ticked off in Things. When you skip a role, it closes, or its deadline moves, the old to-do is cancelled (a moved deadline gets a new to-do). Get the token in Things: **Settings > General > Enable Things URLs > Manage**. Without it, the agent only counts stale to-dos (`jobs.stale` in its output) and you tick them off yourself.
+- The tracker's database lives in iCloud Documents. If macOS offloads it ("Optimise Mac Storage"), the agent reports an error and carries on. Right-click the `job-tracker` folder in Finder and choose **Keep Downloaded** to stop that.
+- The tracker's older `sync_to_things3.py` does a similar job but adds every draft and every unread email again on each run. Leave it switched off once this is on.
+
+Check what it would add with `python3 -m onebox.agent --dry-run` (see `jobs.would_add`). It remembers what it added in `~/.config/onebox/jobs-seen.json`.
