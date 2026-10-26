@@ -1,0 +1,176 @@
+"""The One Inbox server that runs on the Pi. Standard library only.
+
+Run:  python3 -m onebox.server
+Config comes from environment variables (see docs/setup.md):
+  ONEBOX_DB, ONEBOX_HOST, ONEBOX_PORT, ONEBOX_TZ,
+  ONEBOX_UI_KEY, ONEBOX_AGENT_TOKEN, ONEBOX_WATCH_TOKEN
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import os
+import re
+from datetime import datetime
+from http import cookies
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
+
+from . import feed
+from .store import Store
+
+WEB_DIR = Path(__file__).parent / "web"
+COOKIE = "onebox_key"
+MAX_BODY = 2_000_000
+
+
+class Config:
+    def __init__(self, env=os.environ):
+        self.db = env.get("ONEBOX_DB", "onebox.sqlite3")
+        self.host = env.get("ONEBOX_HOST", "127.0.0.1")
+        self.port = int(env.get("ONEBOX_PORT", "8787"))
+        self.tz = ZoneInfo(env.get("ONEBOX_TZ", "Europe/Copenhagen"))
+        self.ui_key = env.get("ONEBOX_UI_KEY", "")
+        self.agent_token = env.get("ONEBOX_AGENT_TOKEN", "")
+        self.watch_token = env.get("ONEBOX_WATCH_TOKEN", "")
+        missing = [n for n, v in [("ONEBOX_UI_KEY", self.ui_key), ("ONEBOX_AGENT_TOKEN", self.agent_token),
+                                  ("ONEBOX_WATCH_TOKEN", self.watch_token)] if len(v) < 16]
+        if missing:
+            raise SystemExit(f"Set these to random strings of 16+ characters: {', '.join(missing)}")
+
+
+def _same(a: str, b: str) -> bool:
+    return bool(a) and bool(b) and hmac.compare_digest(a.encode(), b.encode())
+
+
+def make_handler(cfg: Config, store: Store):
+    ui_cookie_value = hashlib.sha256(("onebox:" + cfg.ui_key).encode()).hexdigest()
+
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "OneInbox/1"
+
+        def log_message(self, fmt, *args):  # keep logs free of tokens and query strings
+            print(f"{self.command} {urlparse(self.path).path} {args[1] if len(args) > 1 else ''}")
+
+        # --- helpers ---------------------------------------------------
+        def _send(self, code: int, body: bytes = b"", ctype: str = "application/json", headers=None):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            for k, v in (headers or {}).items():
+                self.send_header(k, v)
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        def _json(self, code: int, obj) -> None:
+            self._send(code, json.dumps(obj).encode())
+
+        def _body(self) -> dict:
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > MAX_BODY:
+                raise ValueError("body too large")
+            raw = self.rfile.read(n) if n else b"{}"
+            return json.loads(raw or b"{}")
+
+        def _ui_ok(self) -> bool:
+            jar = cookies.SimpleCookie(self.headers.get("Cookie", ""))
+            return COOKIE in jar and _same(jar[COOKIE].value, ui_cookie_value)
+
+        def _agent_ok(self) -> bool:
+            auth = self.headers.get("Authorization", "")
+            return auth.startswith("Bearer ") and _same(auth[7:], cfg.agent_token)
+
+        def _now(self) -> datetime:
+            return datetime.now(cfg.tz)
+
+        # --- routes ----------------------------------------------------
+        def do_GET(self):
+            url = urlparse(self.path)
+            path = url.path
+            if path == "/healthz":
+                return self._json(200, {"ok": True})
+            if path == "/feed/watch.json":
+                if not _same(self.headers.get("X-OneInbox-Token", ""), cfg.watch_token):
+                    return self._send(401)
+                status = store.get_meta("things_status", {})
+                return self._json(200, feed.build(status, store.xp(), self._now()))
+            if path == "/":
+                if not self._ui_ok():
+                    return self._send(200, (WEB_DIR / "login.html").read_bytes(), "text/html; charset=utf-8")
+                return self._send(200, (WEB_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
+            if path == "/api/items":
+                if not self._ui_ok():
+                    return self._send(401)
+                return self._json(200, {
+                    "items": store.items(),
+                    "last_sync": store.get_meta("last_sync"),
+                    "things": store.get_meta("things_status", {}),
+                    "xp": store.xp(),
+                })
+            if path == "/api/outbox":
+                if not self._agent_ok():
+                    return self._send(401)
+                return self._json(200, {"items": store.outbox()})
+            return self._send(404)
+
+        def do_POST(self):
+            path = urlparse(self.path).path
+            if path == "/login":
+                n = min(int(self.headers.get("Content-Length") or 0), 4096)
+                key = parse_qs(self.rfile.read(n).decode(errors="replace")).get("key", [""])[0]
+                if not _same(key, cfg.ui_key):
+                    return self._send(401, b"Wrong key. Go back and try again.", "text/plain; charset=utf-8")
+                secure = "; Secure" if self.headers.get("X-Forwarded-Proto") == "https" else ""
+                return self._send(303, headers={
+                    "Location": "/",
+                    "Set-Cookie": f"{COOKIE}={ui_cookie_value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000{secure}",
+                })
+            try:
+                m = re.fullmatch(r"/api/items/([0-9a-f]{16})/decision", path)
+                if m:
+                    if not self._ui_ok():
+                        return self._send(401)
+                    decision = self._body().get("decision")
+                    if not store.decide(m.group(1), decision):
+                        return self._json(409, {"error": "Already sent to Things, or no such item."})
+                    return self._json(200, {"ok": True})
+                if path == "/api/ingest":
+                    if not self._agent_ok():
+                        return self._send(401)
+                    body = self._body()
+                    n = store.upsert_items(body.get("items", []))
+                    if "things" in body:
+                        status = dict(body["things"])
+                        store.record_completed(status.pop("completed_ids", []))
+                        store.set_meta("things_status", status)
+                    store.set_meta("last_sync", self._now().isoformat(timespec="seconds"))
+                    return self._json(200, {"ok": True, "items": n})
+                if path == "/api/outbox/ack":
+                    if not self._agent_ok():
+                        return self._send(401)
+                    return self._json(200, {"ok": True, "acked": store.ack_outbox(self._body().get("ids", []))})
+            except (ValueError, json.JSONDecodeError) as e:
+                return self._json(400, {"error": str(e)})
+            return self._send(404)
+
+    return Handler
+
+
+def main() -> None:
+    cfg = Config()
+    store = Store(cfg.db)
+    httpd = ThreadingHTTPServer((cfg.host, cfg.port), make_handler(cfg, store))
+    print(f"One Inbox listening on http://{cfg.host}:{cfg.port}")
+    httpd.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

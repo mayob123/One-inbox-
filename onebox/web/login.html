@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One Inbox</title>
+<style>
+:root { --bg: #F2F4F7; --surface: #FFFFFF; --fg: #131B24; --muted: #4B5664; --line: #D6DCE3; --accent: #2552C2; --on-accent: #FFFFFF; }
+@media (prefers-color-scheme: dark) { :root { --bg: #0F141A; --surface: #18202A; --fg: #E9EEF4; --muted: #A6B1BF; --line: #2E3946; --accent: #7FA4F5; --on-accent: #0F141A; color-scheme: dark; } }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, sans-serif; display: grid; place-items: center; min-height: 100vh; padding: 0 16px; }
+form { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 12px; width: min(360px, 100%); box-sizing: border-box; }
+h1 { margin: 0; font-size: 24px; }
+input { font: inherit; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+button { font: 700 16px system-ui, sans-serif; min-height: 48px; border: 0; border-radius: 12px; background: var(--accent); color: var(--on-accent); }
+p { margin: 0; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<form method="post" action="/login">
+  <h1>One Inbox</h1>
+  <label for="key">Your key</label>
+  <input id="key" name="key" type="password" autocomplete="current-password" required>
+  <button type="submit">Open</button>
+  <p>Only needed once per device. The key is in your setup notes.</p>
+</form>
+</body>
+</html>

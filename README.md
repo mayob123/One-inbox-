@@ -1,3 +1,50 @@
 # One Inbox
 
-One place for everything that needs Ben: mail, e-Boks and Aula alerts, bills and friends, sorted into Things 3.
+One place for everything that needs Ben: mail, e-Boks and Aula alerts, bills, plans and friends. It reads it all, works out what you already dealt with, flags scams, and asks only about the rest. Your picks go into Things 3, which stays the one list you trust.
+
+```
+ Mail (mac.com, Gmail) ─┐                       ┌─> iPhone: triage page (Add / Done / Later / Not mine)
+ Things 3 ──────────────┼─> Mac agent ─> Pi ────┼─> Garmin: buddy watch face feed
+ Messages (friends) ────┘   every 15 min        └─> Things 3: your picks, added by the Mac
+```
+
+- **Local.** Runs on your Pi and Mac. Reached at home as `inbox.home` (Pi-hole local DNS) and away over Tailscale. Nothing is public.
+- **Read-only.** Reads mail headers, Things and Messages. Never sends, pays, deletes or logs in to MitID.
+- **No dependencies.** Python standard library only, on both the Pi and the Mac.
+
+## What v1 does
+
+| Mail that is… | Goes to |
+| --- | --- |
+| Needs you (bill, letter, Danish message, invite) | **Needs your call**, with a suggested task |
+| Already handled (you replied, accepted, or a later email confirms it) | **Looks done**, with the evidence |
+| Pretending to be a brand from the wrong domain, or asking for card details | **Likely scams** |
+| Newsletters, receipts, sign-in notices | Folded away |
+
+The Pi also serves `/feed/watch.json` for the Pokémon buddy watch face: items left, next item, next bill, XP and the buddy's mood. Contract: [docs/watch-feed.md](docs/watch-feed.md).
+
+## Set up
+
+See [docs/setup.md](docs/setup.md): Pi install script, Pi-hole name, Tailscale HTTPS, Mac agent.
+
+## Develop
+
+```bash
+python3 -m unittest discover -s tests -t .
+python3 -m onebox.agent --dry-run    # on the Mac, prints what it would send
+```
+
+| File | What it is |
+| --- | --- |
+| `onebox/triage.py` | Rules that sort mail: done detection, scams, noise, areas |
+| `onebox/agent.py` | Mac agent: Mail and Things readers, sync with the Pi, adds to Things |
+| `onebox/server.py` | Pi server: page, API, watch feed |
+| `onebox/store.py` | SQLite storage on the Pi |
+| `onebox/feed.py` | Watch feed and buddy mood |
+| `onebox/web/` | The phone page |
+
+## Next
+
+- Danish translation and one-line summaries for school and e-Boks messages
+- Morning brief notification at 07:30
+- Friends page and Pi dashboard from the design
