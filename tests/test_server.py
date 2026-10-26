@@ -183,6 +183,34 @@ class ServerTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             Config(dict(ENV, ONEBOX_CAPTURE_TOKEN="short"))
 
+    def test_todo_done_and_skip(self):
+        W = {"X-OneInbox-Token": "w" * 20}
+        rows = [{"id": "uuidA", "title": "Danish homework", "kind": "danish", "due": None},
+                {"id": "uuidB", "title": "Pay phone bill", "kind": "bill", "due": None},
+                {"id": "uuidC", "title": "Ring dentist", "kind": "admin", "due": None}]
+        self.ingest(things={"left": 3, "done_today": 0, "next": "Danish homework", "next_kind": "danish",
+                            "next_id": "uuidA", "today": rows, "completed_ids": []})
+        self.assertEqual(self.web.req(self.base, "POST", "/api/todo/done", {"id": "uuidA"})[0], 401)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/todo/done", {"id": "nope"}, W)[0], 404)
+        code, raw = self.web.req(self.base, "POST", "/api/todo/done", {"id": "uuidA"}, W)
+        self.assertEqual(code, 200)
+        f = json.loads(raw)
+        self.assertEqual((f["now_id"], f["left"], f["done"], f["xp"]), ("uuidB", 2, 1, 1))
+        # The phone skips B with its capture token.
+        self.web.req(self.base, "POST", "/api/todo/skip", {"id": "uuidB"}, {"Authorization": "Bearer " + "c" * 20})
+        f = json.loads(self.web.req(self.base, "GET", "/feed/watch.json", headers=W)[1])
+        self.assertEqual((f["next"], f["now_id"]), ("Ring dentist", "uuidC"))
+        items = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers=W)[1])["items"]
+        self.assertEqual([i["id"] for i in items], ["uuidC", "uuidB"])
+        # The Mac completes A in Things once, then Things reports it done: XP stays 1.
+        self.assertEqual(json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])["ids"], ["uuidA"])
+        self.web.req(self.base, "POST", "/api/todo/ack", {"ids": ["uuidA"]}, self.agent)
+        self.assertEqual(json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])["ids"], [])
+        self.ingest(things={"left": 2, "done_today": 1, "next": "Pay phone bill", "next_kind": "bill",
+                            "next_id": "uuidB", "today": rows[1:], "completed_ids": ["uuidA"]})
+        f = json.loads(self.web.req(self.base, "GET", "/feed/watch.json", headers=W)[1])
+        self.assertEqual((f["now_id"], f["left"], f["done"], f["xp"]), ("uuidC", 2, 1, 1))
+
 
 if __name__ == "__main__":
     unittest.main()

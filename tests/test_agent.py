@@ -131,6 +131,12 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(datetime.fromisoformat(events[1]["start"]), (NOW + timedelta(hours=3)).replace(second=0, microsecond=0))
         self.assertEqual(agent.read_calendar({"calendar_db": self.mail}, NOW)[0], [])  # wrong schema: no crash
 
+    def test_things_done_url(self):
+        url = agent.things_done_url("ABC123", "tok&en")
+        q = urllib.parse.parse_qs(url.split("?", 1)[1])
+        self.assertTrue(url.startswith("things:///update?"))
+        self.assertEqual((q["id"], q["completed"], q["auth-token"]), (["ABC123"], ["true"], ["tok&en"]))
+
     def test_things_url_is_valid_json(self):
         url = agent.things_add_url([{"task": "Pay & check", "title": "Bill", "sender": "V", "received": "2026-10-22T00:00:00",
                                      "why": "", "area": "Admin"}])

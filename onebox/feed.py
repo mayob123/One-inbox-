@@ -33,8 +33,9 @@ def mood(left: int, overdue: int, friends_overdue: int, now: datetime) -> str:
     return "normal"
 
 
-def next_event(events: list[dict], now: datetime) -> tuple[str | None, str | None]:
-    """The first event that hasn't started yet, within 24 h: ("Lecture", "14:00") or ("Dentist", "Tue 09:00")."""
+def next_event(events: list[dict], now: datetime) -> tuple[str | None, str | None, int | None]:
+    """The first event that hasn't started yet, within 24 h, with its start as epoch seconds:
+    ("Lecture", "14:00", 1793019600) or ("Dentist", "Tue 09:00", ...)."""
     now = now if now.tzinfo else now.astimezone()
     for e in events or []:
         try:
@@ -43,15 +44,36 @@ def next_event(events: list[dict], now: datetime) -> tuple[str | None, str | Non
             continue
         if now <= start < now + timedelta(hours=24):
             at = start.strftime("%H:%M") if start.date() == now.date() else start.strftime("%a %H:%M")
-            return short(e.get("title")), at
-    return None, None
+            return short(e.get("title")), at, int(start.timestamp())
+    return None, None, None
 
 
-def build(status: dict, xp: int, now: datetime) -> dict:
+def apply_actions(status: dict, actions: dict | None) -> dict:
+    """Drop items ticked on the watch or phone and move skipped ones to the end, before the Mac
+    has caught up. Works on a copy; an old agent without ids or a today list is left as is."""
+    rows = status.get("today")
+    if not actions or not rows:
+        return status
+    done, skip = set(actions.get("done", [])), list(actions.get("skip", []))
+    kept = [r for r in rows if r.get("id") not in done]
+    order = {u: i for i, u in enumerate(skip)}
+    kept.sort(key=lambda r: (r.get("id") in order, order.get(r.get("id"), 0)))  # stable: skips last, oldest skip first
+    gone = len(rows) - len(kept)
+    first = kept[0] if kept else None
+    return {**status, "today": kept,
+            "left": max(0, int(status.get("left", 0)) - gone),
+            "done_today": int(status.get("done_today", 0)) + gone,
+            "next": first["title"] if first else None,
+            "next_kind": first.get("kind") if first else None,
+            "next_id": first.get("id") if first else None}
+
+
+def build(status: dict, xp: int, now: datetime, actions: dict | None = None) -> dict:
     """status comes from the Mac agent's last report (see agent.things_status)."""
+    status = apply_actions(status, actions)
     left = int(status.get("left", 0))
     kind = status.get("next_kind")
-    event, event_at = next_event(status.get("events", []), now)
+    event, event_at, event_ts = next_event(status.get("events", []), now)
     return {
         "v": FEED_VERSION,
         "at": status.get("at") or now.isoformat(timespec="seconds"),
@@ -64,19 +86,23 @@ def build(status: dict, xp: int, now: datetime) -> dict:
         "mood": mood(left, int(status.get("overdue", 0)), int(status.get("friends_overdue", 0)), now),
         "event": event,
         "event_at": event_at,
+        "now_id": status.get("next_id") if status.get("next") else None,
+        "event_ts": event_ts,
     }
 
 
 TITLE_MAX = 80
 
 
-def today(status: dict, xp: int, now: datetime) -> dict:
+def today(status: dict, xp: int, now: datetime, actions: dict | None = None) -> dict:
     """The watch feed plus every open item in Things Today, for the Pocket Pal phone app."""
+    status = apply_actions(status, actions)
     items = []
     for it in status.get("today") or []:
         title = short(it.get("title"), TITLE_MAX)
         if not title:
             continue
         kind = it.get("kind")
-        items.append({"title": title, "kind": kind if kind in KINDS else "other", "due": it.get("due")})
+        items.append({"id": it.get("id"), "title": title, "kind": kind if kind in KINDS else "other",
+                      "due": it.get("due")})
     return {**build(status, xp, now), "items": items}

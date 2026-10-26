@@ -20,6 +20,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, time, timedelta, timezone
@@ -172,7 +173,7 @@ def things_status(db_path: str, now: datetime) -> dict:
             bill = d.strftime("%a") if 0 <= (d - today).days < 7 else d.strftime("%-d %b")
             break
     first = open_today[0] if open_today else None
-    today_list = [{"title": t["title"], "kind": kind_of(t["title"], t["area"], t["project"]),
+    today_list = [{"id": t["uuid"], "title": t["title"], "kind": kind_of(t["title"], t["area"], t["project"]),
                    "due": from_things_date(t["deadline"]).isoformat() if t["deadline"] else None}
                   for t in open_today[:TODAY_MAX]]
     return {
@@ -182,6 +183,7 @@ def things_status(db_path: str, now: datetime) -> dict:
         "completed_ids": completed_ids,
         "overdue": overdue,
         "next": first["title"] if first else None,
+        "next_id": first["uuid"] if first else None,
         "next_kind": kind_of(first["title"], first["area"], first["project"]) if first else None,
         "bill": bill,
         "today": today_list,
@@ -289,6 +291,28 @@ def things_add_url(items: list[dict]) -> str:
     return "things:///json?data=" + urllib.parse.quote(json.dumps(todos))
 
 
+def things_done_url(uuid: str, auth_token: str) -> str:
+    """Things needs its own auth token (Settings > General > Enable Things URLs) to change a to-do."""
+    return "things:///update?" + urllib.parse.urlencode({"id": uuid, "completed": "true", "auth-token": auth_token})
+
+
+def complete_in_things(cfg: dict, dry_run: bool = False) -> int | str:
+    """Tick off in Things what Ben marked done on the watch or phone."""
+    try:
+        ids = call(cfg["server"], cfg["token"], "GET", "/api/todo/outbox").get("ids", [])
+    except urllib.error.HTTPError as e:  # a Pi that hasn't been updated yet
+        return f"Pi has no /api/todo/outbox yet ({e.code}). Update it with install-pi.sh."
+    if not ids:
+        return 0
+    token = cfg.get("things_auth_token", "")
+    if not token:
+        return f"{len(ids)} waiting: add things_auth_token to agent.json (see docs/setup.md)"
+    for uuid in ids:
+        subprocess.run(["open", "-g", things_done_url(uuid, token)], check=True)
+    call(cfg["server"], cfg["token"], "POST", "/api/todo/ack", {"ids": ids})
+    return len(ids)
+
+
 def load_config() -> dict:
     cfg = json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
     cfg.setdefault("server", os.environ.get("ONEBOX_SERVER", "http://inbox.home:8787"))
@@ -328,6 +352,7 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
         subprocess.run(["open", "-g", things_add_url(outbox)], check=True)
         call(cfg["server"], cfg["token"], "POST", "/api/outbox/ack", {"ids": [i["id"] for i in outbox]})
     report["added_to_things"] = len(outbox)
+    report["completed_in_things"] = complete_in_things(cfg)
     report["calendar"] = sync_calendars(cfg, now)
     return report
 

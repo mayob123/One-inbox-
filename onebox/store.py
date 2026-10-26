@@ -26,6 +26,14 @@ CREATE TABLE IF NOT EXISTS quiet (
   sender TEXT PRIMARY KEY,
   at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS todo_actions (
+  uuid TEXT NOT NULL,
+  action TEXT NOT NULL,
+  day TEXT NOT NULL,
+  at TEXT NOT NULL,
+  synced_at TEXT,
+  PRIMARY KEY (uuid, action)
+);
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -167,8 +175,45 @@ class Store:
         return added
 
     def xp(self) -> int:
+        """Things completions, plus items ticked on the watch or phone that Things hasn't caught up with."""
         with self.lock:
-            return self.db.execute("SELECT COUNT(*) FROM completed").fetchone()[0]
+            return self.db.execute(
+                """SELECT (SELECT COUNT(*) FROM completed) +
+                          (SELECT COUNT(*) FROM todo_actions WHERE action='done'
+                           AND uuid NOT IN (SELECT uuid FROM completed))""").fetchone()[0]
+
+    # --- to-dos ticked or skipped on the watch or phone ------------------
+
+    def todo_action(self, uuid: str, action: str, day: str) -> None:
+        """done: hide it now, and the Mac completes it in Things. skip: move it to the end until `day` ends."""
+        with self.lock:
+            self.db.execute(
+                """INSERT INTO todo_actions (uuid, action, day, at) VALUES (?, ?, ?, ?)
+                   ON CONFLICT(uuid, action) DO UPDATE SET day=excluded.day, at=excluded.at""",
+                (uuid, action, day, now_iso()))
+            self.db.commit()
+
+    def todo_state(self, day: str) -> dict:
+        """{"done": ids ticked but not yet completed in Things, "skip": ids skipped today, oldest skip first}."""
+        with self.lock:
+            done = [r[0] for r in self.db.execute(
+                "SELECT uuid FROM todo_actions WHERE action='done' AND uuid NOT IN (SELECT uuid FROM completed)")]
+            skip = [r[0] for r in self.db.execute(
+                "SELECT uuid FROM todo_actions WHERE action='skip' AND day=? ORDER BY at", (day,))]
+        return {"done": done, "skip": skip}
+
+    def todo_outbox(self) -> list[str]:
+        with self.lock:
+            return [r[0] for r in self.db.execute(
+                "SELECT uuid FROM todo_actions WHERE action='done' AND synced_at IS NULL ORDER BY at")]
+
+    def ack_todos(self, uuids: list[str]) -> int:
+        ts = now_iso()
+        with self.lock:
+            n = sum(self.db.execute("UPDATE todo_actions SET synced_at=? WHERE uuid=? AND action='done'",
+                                    (ts, u)).rowcount for u in uuids)
+            self.db.commit()
+        return n
 
     # --- meta: last agent report ------------------------------------------
 

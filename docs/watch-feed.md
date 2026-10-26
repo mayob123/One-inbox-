@@ -23,7 +23,9 @@ Agreed 2026-10-26 between One Inbox (the Pi side) and the Pokémon buddy watch f
   "bill": "Thu",
   "mood": "hungry",
   "event": "MSc lecture: Resear…",
-  "event_at": "14:00"
+  "event_at": "14:00",
+  "event_ts": 1793019600,
+  "now_id": "8Ck3kB1nT7Wq2xYzAbCdEf"
 }
 ```
 
@@ -40,6 +42,8 @@ Agreed 2026-10-26 between One Inbox (the Pi side) and the Pokémon buddy watch f
 | `mood` | string | `happy` (left = 0), `normal`, `hungry` (anything overdue), `lonely` (friend overdue, nothing else overdue), `sleepy` (after 22:00 with left > 0). First match in order: hungry, lonely, sleepy, happy, normal. |
 | `event` | string or null | Next calendar event that hasn't started, within 24 h. Max 20 characters, cut with "…". null if none. Added 2026-10-26. |
 | `event_at` | string or null | Its local start time: `"14:00"` if today, `"Tue 09:00"` if tomorrow. null with `event`. |
+| `event_ts` | int or null | `event`'s start as Unix epoch seconds, for a countdown. Added 2026-10-26. |
+| `now_id` | string or null | Things id of the item in `next` (the NOW item, after any done or skip below). null when `next` is null or the Mac agent is too old to send ids. Added 2026-10-26. |
 
 The Mac agent sends the next few timed events (48 h ahead) on each sync, and the Pi picks the first one still to come each time the feed is read, so `event` moves on even between syncs. All-day events and the Birthdays and Holidays calendars are left out.
 
@@ -63,3 +67,14 @@ Added 2026-10-26 for the Pocket Pal iPhone app, which shows the whole Today list
 | `items[].due` | string or null | The Things deadline as `YYYY-MM-DD`. |
 
 The watch keeps using `/feed/watch.json`, which stays under 1 KB for the Garmin's memory. The list needs the Mac agent from this change too (it reports `today`); until it runs, `items` is empty.
+
+## Today list for the phone
+
+`GET /feed/today.json`, same token: every field above plus `items`, the open Things Today list in order, each `{"id", "title", "kind", "due"}`. `id` is the Things id, so the phone can open it with `things:///show?id=<id>`. `title` is cut to 80 characters and `due` is an ISO date or null.
+
+## Done and skip from the watch or phone
+
+`POST /api/todo/done` and `POST /api/todo/skip` with body `{"id": "<Things id>"}`. Send the `X-OneInbox-Token` header (the watch), or `Authorization: Bearer <ONEBOX_CAPTURE_TOKEN>` (the phone). The reply is `{"ok": true, ...watch feed...}`, so the caller can redraw straight away. `404` means the id isn't in today's list.
+
+- **done**: the item drops out of both feeds immediately, `left` goes down, `done` and `xp` go up. On its next sync the Mac agent ticks it off in Things (needs `things_auth_token` in `agent.json`), and it is counted once.
+- **skip**: the item moves to the end of today's order until local midnight. Things is not changed. Skipping several keeps them in the order they were skipped.
