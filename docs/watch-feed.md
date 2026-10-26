@@ -44,3 +44,22 @@ Agreed 2026-10-26 between One Inbox (the Pi side) and the Pokémon buddy watch f
 The Mac agent sends the next few timed events (48 h ahead) on each sync, and the Pi picks the first one still to come each time the feed is read, so `event` moves on even between syncs. All-day events and the Birthdays and Holidays calendars are left out.
 
 Unknown fields must be ignored by the watch, so new fields can be added without breaking it.
+
+## Phone feed: `/feed/today.json`
+
+Added 2026-10-26 for the Pocket Pal iPhone app, which shows the whole Today list. Same header and token as the watch feed. The body is the watch feed plus `items`, every open item in Things Today in Today order (at most 40):
+
+```json
+{ "...": "the watch fields above", "items": [
+  { "title": "A-kasse hours", "kind": "admin", "due": null },
+  { "title": "Pay the electricity bill", "kind": "bill", "due": "2026-10-30" }
+] }
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `items[].title` | string | Up to 80 characters, cut with "…". |
+| `items[].kind` | string | As `kind` above. |
+| `items[].due` | string or null | The Things deadline as `YYYY-MM-DD`. |
+
+The watch keeps using `/feed/watch.json`, which stays under 1 KB for the Garmin's memory. The list needs the Mac agent from this change too (it reports `today`); until it runs, `items` is empty.

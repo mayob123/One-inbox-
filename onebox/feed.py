@@ -1,6 +1,7 @@
 """The small JSON feed the Garmin buddy watch face reads.
 
 Contract: docs/watch-feed.md. Keep it additive: never rename or remove a field.
+The phone also gets the whole Today list (today()); the watch feed stays small for the Garmin's memory.
 """
 
 from __future__ import annotations
@@ -64,3 +65,18 @@ def build(status: dict, xp: int, now: datetime) -> dict:
         "event": event,
         "event_at": event_at,
     }
+
+
+TITLE_MAX = 80
+
+
+def today(status: dict, xp: int, now: datetime) -> dict:
+    """The watch feed plus every open item in Things Today, for the Pocket Pal phone app."""
+    items = []
+    for it in status.get("today") or []:
+        title = short(it.get("title"), TITLE_MAX)
+        if not title:
+            continue
+        kind = it.get("kind")
+        items.append({"title": title, "kind": kind if kind in KINDS else "other", "due": it.get("due")})
+    return {**build(status, xp, now), "items": items}

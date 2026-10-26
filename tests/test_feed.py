@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from onebox.feed import build, mood, next_event, short
+from onebox.feed import build, mood, next_event, short, today
 
 NOON = datetime(2026, 10, 26, 12, 0)
 LATE = datetime(2026, 10, 26, 22, 30)
@@ -34,6 +34,17 @@ class FeedTests(unittest.TestCase):
 
     def test_unknown_kind_becomes_other(self):
         self.assertEqual(build({"left": 1, "next": "x", "next_kind": "weird"}, 0, NOON)["kind"], "other")
+
+    def test_today_adds_the_whole_list(self):
+        status = {"left": 2, "next": "A-kasse hours", "next_kind": "admin",
+                  "today": [{"title": "A-kasse hours", "kind": "admin", "due": None},
+                            {"title": "x" * 200, "kind": "weird", "due": "2026-10-28"},
+                            {"title": "  ", "kind": "other"}]}
+        f = today(status, 5, NOON)
+        self.assertEqual({k: v for k, v in f.items() if k != "items"}, build(status, 5, NOON))
+        self.assertEqual(f["items"][0], {"title": "A-kasse hours", "kind": "admin", "due": None})
+        self.assertEqual((len(f["items"]), len(f["items"][1]["title"]), f["items"][1]["kind"]), (2, 80, "other"))
+        self.assertEqual(today({}, 0, NOON)["items"], [])
 
     def test_next_event(self):
         cph = timezone(timedelta(hours=1))
