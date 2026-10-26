@@ -77,7 +77,7 @@ chmod 600 ~/.config/onebox/agent.json
 
 `handles` are the phone numbers or emails exactly as Messages shows them. `friends` can stay empty for now.
 
-**Full Disk Access.** Mail, Messages and Things keep their data in protected folders. Open System Settings → Privacy & Security → Full Disk Access → `+`, press Cmd-Shift-G, type `/usr/bin/python3`, add it and switch it on.
+**Full Disk Access.** Mail, Messages, Things and Calendar keep their data in protected folders. Open System Settings → Privacy & Security → Full Disk Access → `+`, press Cmd-Shift-G, type `/usr/bin/python3`, add it and switch it on.
 
 Try it without sending anything:
 
@@ -102,6 +102,10 @@ Mail must have your accounts added (mac.com and Gmail already are). Spark can st
 Open the `ts.net` address in Safari, enter your UI key once, then Share → Add to Home Screen. It now opens like an app.
 
 Picks you mark **Add to Things** appear in your Things Inbox within 15 minutes (the Mac must be awake).
+
+## Calendar on the watch
+
+The agent reads Calendar.app's database (read-only) for "up next" on the watch. Every calendar Calendar.app shows counts: iCloud, Google, Exchange, and subscribed ones. For MSc lectures from an ICS link, use Calendar → File → New Calendar Subscription and paste the link. Leave calendars out with `"calendar_skip": ["Birthdays", "Work"]` in `agent.json` (the default skips Birthdays, Holidays and Siri Suggestions). `--dry-run` shows how many events it found.
 
 ## Turn things off
 
