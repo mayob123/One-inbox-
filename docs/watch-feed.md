@@ -72,6 +72,22 @@ The watch keeps using `/feed/watch.json`, which stays under 1 KB for the Garmin'
 
 `GET /feed/today.json`, same token: every field above plus `items`, the open Things Today list in order, each `{"id", "title", "kind", "due"}`. `id` is the Things id, so the phone can open it with `things:///show?id=<id>`. `title` is cut to 80 characters and `due` is an ISO date or null.
 
+### Pillars
+
+`today.json` also has `pillars`: one entry for every kind (`bill`, `school`, `admin`, `msc`, `job`, `danish`, `friend`, `travel`, `other`), each
+
+```json
+{"done_week": 2, "open": 3, "waiting_mail": 1, "last_done": "2026-10-26", "next_due": "2026-10-28"}
+```
+
+- `done_week`: Things to-dos of that kind completed since Monday 00:00 local time, plus any ticked on the watch or phone that Things hasn't caught up with.
+- `open`: open to-dos of that kind anywhere in Things except Someday.
+- `waiting_mail`: emails of that kind still waiting on a decision on the triage page.
+- `last_done`: date of the most recent completion in the last 60 days, or null.
+- `next_due`: earliest deadline among the open to-dos, or null.
+
+A to-do's kind comes from keywords in its title, area and project (see `KIND_WORDS` in `agent.py`), so naming Things areas after the pillars ("Danish", "MSc", "Job") makes them line up.
+
 ## Done and skip from the watch or phone
 
 `POST /api/todo/done` and `POST /api/todo/skip` with body `{"id": "<Things id>"}`. Send the `X-OneInbox-Token` header (the watch), or `Authorization: Bearer <ONEBOX_CAPTURE_TOKEN>` (the phone). The reply is `{"ok": true, ...watch feed...}`, so the caller can redraw straight away. `404` means the id isn't in today's list.

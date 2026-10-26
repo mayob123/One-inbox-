@@ -190,6 +190,50 @@ def things_status(db_path: str, now: datetime) -> dict:
     }
 
 
+# --- Pillars: how each area of life is going, for the phone ---------------
+
+PILLAR_DAYS = 60  # how far back last_done looks
+
+
+def things_pillars(db_path: str, now: datetime) -> dict:
+    """Per kind: done since Monday, open (not Someday), last done date and next deadline."""
+    today = now.date()
+    monday = datetime.combine(today - timedelta(days=today.weekday()), time.min, tzinfo=now.tzinfo).timestamp()
+    since = (now - timedelta(days=PILLAR_DAYS)).timestamp()
+    join = """FROM TMTask t
+              LEFT JOIN TMArea a ON a.uuid = t.area
+              LEFT JOIN TMTask p ON p.uuid = t.project
+              LEFT JOIN TMArea pa ON pa.uuid = p.area"""
+    cols = "t.title, COALESCE(a.title, pa.title, '') AS area, COALESCE(p.title, '') AS project"
+    con = ro_connect(db_path)
+    try:
+        open_rows = con.execute(f"SELECT {cols}, t.deadline {join} "
+                                "WHERE t.type = 0 AND t.status = 0 AND t.trashed = 0 AND t.start != 2").fetchall()
+        done_rows = con.execute(f"SELECT {cols}, t.stopDate {join} "
+                                "WHERE t.type = 0 AND t.status = 3 AND t.trashed = 0 AND t.stopDate >= ?",
+                                (since,)).fetchall()
+    finally:
+        con.close()
+    out: dict = {}
+
+    def entry(r) -> dict:
+        k = kind_of(r["title"], r["area"], r["project"])
+        return out.setdefault(k, {"done_week": 0, "open": 0, "last_done": None, "next_due": None})
+
+    for r in open_rows:
+        e = entry(r)
+        e["open"] += 1
+        if r["deadline"]:
+            due = from_things_date(r["deadline"]).isoformat()
+            e["next_due"] = min(e["next_due"] or due, due)
+    for r in done_rows:
+        e = entry(r)
+        e["done_week"] += r["stopDate"] >= monday
+        day = datetime.fromtimestamp(r["stopDate"], now.tzinfo).date().isoformat()
+        e["last_done"] = max(e["last_done"] or day, day)
+    return out
+
+
 # --- Calendar ------------------------------------------------------------
 
 def next_events(db_path: str, now: datetime, hours: int = 48, skip: tuple = CALENDAR_SKIP,
@@ -337,6 +381,7 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
     things_db = cfg.get("things_db") or newest(THINGS_GLOB)
     if things_db:
         status = things_status(things_db, now)
+        status["pillars"] = things_pillars(things_db, now)
         status["friends_overdue"] = friends_overdue(cfg.get("messages_db", MESSAGES_DB), cfg.get("friends", []), now)
         status["events"], report["calendar"] = read_calendar(cfg, now)
         payload["things"] = status
