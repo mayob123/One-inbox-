@@ -211,6 +211,15 @@ class ServerTests(unittest.TestCase):
         f = json.loads(self.web.req(self.base, "GET", "/feed/watch.json", headers=W)[1])
         self.assertEqual((f["now_id"], f["left"], f["done"], f["xp"]), ("uuidC", 2, 1, 1))
 
+    def test_today_feed_has_pillars_with_waiting_mail(self):
+        self.ingest(things={"left": 0, "pillars": {"bill": {"done_week": 1, "open": 2}}})
+        code, raw = self.web.req(self.base, "GET", "/feed/today.json", headers={"X-OneInbox-Token": "w" * 20})
+        p = json.loads(raw)["pillars"]
+        self.assertEqual((p["bill"]["waiting_mail"], p["bill"]["open"], p["danish"]["waiting_mail"]), (1, 2, 0))
+        self.store.decide(ITEM["id"], "later")
+        p = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers={"X-OneInbox-Token": "w" * 20})[1])["pillars"]
+        self.assertEqual(p["bill"]["waiting_mail"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,7 @@ import hmac
 import json
 import os
 import re
+from collections import Counter
 from datetime import datetime
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -117,8 +118,10 @@ def make_handler(cfg: Config, store: Store):
                 if not _same(self.headers.get("X-OneInbox-Token", ""), cfg.watch_token):
                     return self._send(401)
                 status = store.get_meta("things_status", {})
-                make = feed.build if path == "/feed/watch.json" else feed.today
-                return self._json(200, make(status, store.xp(), self._now(), self._todo_state()))
+                if path == "/feed/watch.json":
+                    return self._json(200, feed.build(status, store.xp(), self._now(), self._todo_state()))
+                waiting = Counter(i.get("kind") for i in store.items() if i["status"] == "decide" and not i["decision"])
+                return self._json(200, feed.today(status, store.xp(), self._now(), self._todo_state(), waiting))
             if path == "/":
                 if not self._ui_ok():
                     return self._send(200, (WEB_DIR / "login.html").read_bytes(), "text/html; charset=utf-8")

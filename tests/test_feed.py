@@ -42,7 +42,7 @@ class FeedTests(unittest.TestCase):
                             {"title": "x" * 200, "kind": "weird", "due": "2026-10-28"},
                             {"title": "  ", "kind": "other"}]}
         f = today(status, 5, NOON)
-        self.assertEqual({k: v for k, v in f.items() if k != "items"}, build(status, 5, NOON))
+        self.assertEqual({k: v for k, v in f.items() if k not in ("items", "pillars")}, build(status, 5, NOON))
         self.assertEqual(f["items"][0], {"id": None, "title": "A-kasse hours", "kind": "admin", "due": None})
         self.assertEqual((len(f["items"]), len(f["items"][1]["title"]), f["items"][1]["kind"]), (2, 80, "other"))
         self.assertEqual(today({}, 0, NOON)["items"], [])
@@ -77,6 +77,17 @@ class FeedTests(unittest.TestCase):
         f = build(status, 10, NOON, {"done": ["A", "B", "C"], "skip": []})
         self.assertEqual((f["next"], f["now_id"], f["left"], f["mood"]), (None, None, 0, "happy"))
         self.assertEqual(build({"left": 1, "next": "Old agent"}, 0, NOON, {"done": ["A"], "skip": []})["now_id"], None)
+
+    def test_pillars(self):
+        status = {"left": 2, "today": [{"id": "A", "title": "Danish homework", "kind": "danish"},
+                                       {"id": "B", "title": "Book Danish lesson", "kind": "danish"}],
+                  "pillars": {"danish": {"done_week": 1, "open": 4, "last_done": "2026-10-20", "next_due": "2026-10-28"}}}
+        p = today(status, 0, NOON, {"done": ["A"], "skip": []}, {"danish": 2, "job": 1})["pillars"]
+        self.assertEqual(set(p), {"bill", "school", "admin", "msc", "job", "danish", "friend", "travel", "other"})
+        self.assertEqual(p["danish"], {"done_week": 2, "open": 3, "last_done": "2026-10-26", "next_due": "2026-10-28",
+                                       "waiting_mail": 2})
+        self.assertEqual(p["msc"], {"done_week": 0, "open": 0, "last_done": None, "next_due": None, "waiting_mail": 0})
+        self.assertEqual(p["job"]["waiting_mail"], 1)
 
 
 if __name__ == "__main__":

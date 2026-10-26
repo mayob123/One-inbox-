@@ -131,6 +131,17 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(datetime.fromisoformat(events[1]["start"]), (NOW + timedelta(hours=3)).replace(second=0, microsecond=0))
         self.assertEqual(agent.read_calendar({"calendar_db": self.mail}, NOW)[0], [])  # wrong schema: no crash
 
+    def test_things_pillars(self):
+        p = agent.things_pillars(self.things, NOW)
+        # make_things: t1 Danish (open, Today), t2 bill (open, due +3), t3 Someday (left out),
+        # t4 open with past deadline, t5 done today, t6 done 8 days ago.
+        self.assertEqual(p["danish"]["open"], 1)
+        self.assertEqual(p["bill"]["next_due"], (NOW.date() + timedelta(days=3)).isoformat())
+        other = p["other"]
+        self.assertEqual((other["open"], other["done_week"]), (1, 1))
+        self.assertEqual(other["last_done"], NOW.date().isoformat())
+        self.assertEqual(sum(e["open"] for e in p.values()), 3)
+
     def test_things_done_url(self):
         url = agent.things_done_url("ABC123", "tok&en")
         q = urllib.parse.parse_qs(url.split("?", 1)[1])

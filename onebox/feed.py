@@ -94,8 +94,29 @@ def build(status: dict, xp: int, now: datetime, actions: dict | None = None) -> 
 TITLE_MAX = 80
 
 
-def today(status: dict, xp: int, now: datetime, actions: dict | None = None) -> dict:
+def pillars(status: dict, waiting_mail: dict, ticked: list[dict], now: datetime) -> dict:
+    """One entry per kind: Things counts from the Mac, mail still waiting on a decision from the Pi,
+    plus anything ticked on the watch or phone that Things hasn't caught up with."""
+    sent = status.get("pillars") or {}
+    out = {}
+    for k in sorted(KINDS):
+        e = dict({"done_week": 0, "open": 0, "last_done": None, "next_due": None}, **sent.get(k, {}))
+        e["waiting_mail"] = int(waiting_mail.get(k, 0))
+        out[k] = e
+    for r in ticked:
+        e = out[r.get("kind") if r.get("kind") in KINDS else "other"]
+        e["done_week"] += 1
+        e["open"] = max(0, e["open"] - 1)
+        e["last_done"] = now.date().isoformat()
+    return out
+
+
+def today(status: dict, xp: int, now: datetime, actions: dict | None = None,
+          waiting_mail: dict | None = None) -> dict:
     """The watch feed plus every open item in Things Today, for the Pocket Pal phone app."""
+    done = set((actions or {}).get("done", []))
+    ticked = [r for r in status.get("today") or [] if r.get("id") in done]
+    life = pillars(status, waiting_mail or {}, ticked, now)
     status = apply_actions(status, actions)
     items = []
     for it in status.get("today") or []:
@@ -105,4 +126,4 @@ def today(status: dict, xp: int, now: datetime, actions: dict | None = None) -> 
         kind = it.get("kind")
         items.append({"id": it.get("id"), "title": title, "kind": kind if kind in KINDS else "other",
                       "due": it.get("due")})
-    return {**build(status, xp, now), "items": items}
+    return {**build(status, xp, now), "items": items, "pillars": life}
