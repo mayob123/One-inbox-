@@ -4,7 +4,8 @@ Each run it:
   1. reads mail headers from Mail's local index (read-only, no bodies),
   2. sorts them (triage.py) and sends the result to the Pi,
   3. reads Things 3 (read-only) for today's count, next item, bills and XP,
-  4. adds anything Ben marked "Add" on his phone to Things, via the Things URL scheme.
+  4. adds anything Ben marked "Add" on his phone to Things, via the Things URL scheme,
+  5. adds study sessions and deadlines from his calendar feeds to Things (studycal.py).
 
 Needs Full Disk Access for the Python that runs it (System Settings > Privacy & Security).
 Config: ~/.config/onebox/agent.json (see docs/setup.md).
@@ -23,6 +24,7 @@ import urllib.request
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
+from . import studycal
 from .triage import Message, summary, triage
 
 HOME = Path.home()
@@ -31,6 +33,7 @@ THINGS_GLOB = str(HOME / "Library/Group Containers/JLMPQHK86H.com.culturedcode.T
                   "Things Database.thingsdatabase/main.sqlite")
 MESSAGES_DB = str(HOME / "Library/Messages/chat.db")
 CONFIG_PATH = Path(os.environ.get("ONEBOX_AGENT_CONFIG", HOME / ".config/onebox/agent.json"))
+CALENDAR_SEEN = CONFIG_PATH.parent / "calendar-seen.json"
 
 SKIP_MAILBOXES = ("junk", "spam", "trash", "deleted", "drafts", "blocked", "outbox")
 APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
@@ -256,6 +259,8 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
         report["things"] = {k: v for k, v in status.items() if k != "completed_ids"}
     if dry_run:
         report["would_send"] = len(items)
+        if cfg.get("calendars") or cfg.get("deadlines"):
+            report["calendar"] = calendar_preview(cfg, now)
         return report
     call(cfg["server"], cfg["token"], "POST", "/api/ingest", payload)
     outbox = call(cfg["server"], cfg["token"], "GET", "/api/outbox").get("items", [])
@@ -263,7 +268,32 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
         subprocess.run(["open", "-g", things_add_url(outbox)], check=True)
         call(cfg["server"], cfg["token"], "POST", "/api/outbox/ack", {"ids": [i["id"] for i in outbox]})
     report["added_to_things"] = len(outbox)
+    report["calendar"] = sync_calendars(cfg, now)
     return report
+
+
+def calendar_preview(cfg: dict, now: datetime) -> dict:
+    events, errors = studycal.collect(cfg, now)
+    seen = studycal.load_seen(Path(cfg.get("calendar_seen", CALENDAR_SEEN)))
+    new = studycal.due_now(events, seen, now)
+    return {"events": len(events), "would_add": [t["attributes"]["title"] for t in studycal.things_json(new, now.date())],
+            "errors": errors}
+
+
+def sync_calendars(cfg: dict, now: datetime) -> dict:
+    if not cfg.get("calendars") and not cfg.get("deadlines"):
+        return {}
+    seen_path = Path(cfg.get("calendar_seen", CALENDAR_SEEN))
+    events, errors = studycal.collect(cfg, now)
+    seen = studycal.load_seen(seen_path)
+    new = studycal.due_now(events, seen, now)
+    todos = studycal.things_json(new, now.date())
+    if todos:
+        subprocess.run(["open", "-g", "things:///json?data=" + urllib.parse.quote(json.dumps(todos))], check=True)
+        for ev in new:
+            seen[ev.key()] = now.date().isoformat()
+    studycal.save_seen(seen_path, seen, now.date())
+    return {"added": len(todos), "errors": errors}
 
 
 def main(argv: list[str] = sys.argv[1:]) -> None:
