@@ -21,7 +21,9 @@ Agreed 2026-10-26 between One Inbox (the Pi side) and the Pokémon buddy watch f
   "next": "A-kasse hours",
   "kind": "admin",
   "bill": "Thu",
-  "mood": "hungry"
+  "mood": "hungry",
+  "event": "MSc lecture: Resear…",
+  "event_at": "14:00"
 }
 ```
 
@@ -36,5 +38,9 @@ Agreed 2026-10-26 between One Inbox (the Pi side) and the Pokémon buddy watch f
 | `kind` | string or null | `bill`, `school`, `admin`, `msc`, `job`, `danish`, `friend`, `travel`, `other`. For discreet mode. |
 | `bill` | string or null | Next bill due as a short day ("Thu", "26 Oct"), null if none in 7 days. |
 | `mood` | string | `happy` (left = 0), `normal`, `hungry` (anything overdue), `lonely` (friend overdue, nothing else overdue), `sleepy` (after 22:00 with left > 0). First match in order: hungry, lonely, sleepy, happy, normal. |
+| `event` | string or null | Next calendar event that hasn't started, within 24 h. Max 20 characters, cut with "…". null if none. Added 2026-10-26. |
+| `event_at` | string or null | Its local start time: `"14:00"` if today, `"Tue 09:00"` if tomorrow. null with `event`. |
+
+The Mac agent sends the next few timed events (48 h ahead) on each sync, and the Pi picks the first one still to come each time the feed is read, so `event` moves on even between syncs. All-day events and the Birthdays and Holidays calendars are left out.
 
 Unknown fields must be ignored by the watch, so new fields can be added without breaking it.

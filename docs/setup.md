@@ -78,7 +78,7 @@ chmod 600 ~/.config/onebox/agent.json
 
 `handles` are the phone numbers or emails exactly as Messages shows them. `friends` can stay empty for now.
 
-**Full Disk Access.** Mail, Messages and Things keep their data in protected folders. Open System Settings → Privacy & Security → Full Disk Access → `+`, press Cmd-Shift-G, type `/usr/bin/python3`, add it and switch it on.
+**Full Disk Access.** Mail, Messages, Things and Calendar keep their data in protected folders. Open System Settings → Privacy & Security → Full Disk Access → `+`, press Cmd-Shift-G, type `/usr/bin/python3`, add it and switch it on.
 
 Try it without sending anything:
 
@@ -126,6 +126,10 @@ One Inbox never logs in to these (they need MitID). It works from their alert em
 - **Aula**: Profile → Settings → Notifications, turn on email for messages, and for events and posts if you want those too.
 
 A new alert from `e-boks.dk`, `mit.dk`, `digitalpost.dk`, `borger.dk` or `aula.dk` skips the yes/no step: it becomes a Things to-do for Today ("Read in Aula: …") and stays on the watch until you tick it. Lookalike senders are still flagged as scams, and alerts older than a week stay on the page instead, so the first sync doesn't flood Things.
+
+## 8. Calendar on the watch
+
+The agent reads Calendar.app's database (read-only) for "up next" on the watch. Every calendar Calendar.app shows counts: iCloud, Google, Exchange, and subscribed ones. For MSc lectures from an ICS link, use Calendar → File → New Calendar Subscription and paste the link. Leave calendars out with `"calendar_skip": ["Birthdays", "Work"]` in `agent.json` (the default skips Birthdays, Holidays and Siri Suggestions). `--dry-run` shows how many events it found.
 
 ## Turn things off
 

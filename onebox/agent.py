@@ -4,6 +4,7 @@ Each run it:
   1. reads mail headers from Mail's local index (read-only, no bodies),
   2. sorts them (triage.py) and sends the result to the Pi,
   3. reads Things 3 (read-only) for today's count, next item, bills and XP,
+     and Calendar (read-only) for the next few events,
   4. adds anything Ben marked "Add" on his phone to Things, via the Things URL scheme.
 
 Needs Full Disk Access for the Python that runs it (System Settings > Privacy & Security).
@@ -30,6 +31,11 @@ MAIL_GLOB = str(HOME / "Library/Mail/V*/MailData/Envelope Index")
 THINGS_GLOB = str(HOME / "Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-*/"
                   "Things Database.thingsdatabase/main.sqlite")
 MESSAGES_DB = str(HOME / "Library/Messages/chat.db")
+CALENDAR_DBS = (  # newer macOS first
+    str(HOME / "Library/Group Containers/group.com.apple.calendar/Calendar.sqlitedb"),
+    str(HOME / "Library/Calendars/Calendar.sqlitedb"),
+)
+CALENDAR_SKIP = ("Birthdays", "Fødselsdage", "Holidays in Denmark", "Helligdage i Danmark", "Siri Suggestions")
 CONFIG_PATH = Path(os.environ.get("ONEBOX_AGENT_CONFIG", HOME / ".config/onebox/agent.json"))
 
 SKIP_MAILBOXES = ("junk", "spam", "trash", "deleted", "drafts", "blocked", "outbox")
@@ -172,6 +178,52 @@ def things_status(db_path: str, now: datetime) -> dict:
     }
 
 
+# --- Calendar ------------------------------------------------------------
+
+def next_events(db_path: str, now: datetime, hours: int = 48, skip: tuple = CALENDAR_SKIP,
+                limit: int = 5) -> list[dict]:
+    """Timed events starting in the next `hours`, soonest first. Repeating events come from
+    Calendar's own occurrence cache. All-day events and skipped calendars are left out."""
+    start = (now - APPLE_EPOCH).total_seconds()
+    con = ro_connect(db_path)
+    try:
+        rows = con.execute(
+            """SELECT ci.summary AS title, COALESCE(oc.occurrence_start_date, oc.occurrence_date) AS start,
+                      COALESCE(c.title, '') AS calendar
+               FROM OccurrenceCache oc
+               JOIN CalendarItem ci ON ci.ROWID = oc.event_id
+               LEFT JOIN Calendar c ON c.ROWID = ci.calendar_id
+               WHERE COALESCE(ci.all_day, 0) = 0
+                 AND COALESCE(oc.occurrence_start_date, oc.occurrence_date) >= ?
+                 AND COALESCE(oc.occurrence_start_date, oc.occurrence_date) < ?
+               ORDER BY 2""",
+            (start, start + hours * 3600),
+        ).fetchall()
+    finally:
+        con.close()
+    out, seen = [], set()
+    for r in rows:
+        if not r["title"] or r["calendar"] in skip or (r["title"], r["start"]) in seen:
+            continue
+        seen.add((r["title"], r["start"]))
+        when = (APPLE_EPOCH + timedelta(seconds=r["start"])).astimezone(now.tzinfo)
+        out.append({"title": r["title"], "start": when.isoformat(timespec="minutes")})
+        if len(out) == limit:
+            break
+    return out
+
+
+def read_calendar(cfg: dict, now: datetime) -> tuple[list[dict], str]:
+    path = cfg.get("calendar_db") or next((p for p in CALENDAR_DBS if os.path.exists(p)), None)
+    if not path:
+        return [], "Calendar database not found. Is Full Disk Access on?"
+    try:
+        events = next_events(path, now, skip=tuple(cfg.get("calendar_skip", CALENDAR_SKIP)))
+    except sqlite3.Error as e:  # Apple changes this schema now and then; never let it stop a sync
+        return [], f"Could not read Calendar: {e}"
+    return events, f"{len(events)} events in the next 48 h"
+
+
 # --- Friends (Messages) ---------------------------------------------------
 
 def friends_overdue(chat_db: str, friends: list[dict], now: datetime) -> int:
@@ -252,6 +304,7 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
     if things_db:
         status = things_status(things_db, now)
         status["friends_overdue"] = friends_overdue(cfg.get("messages_db", MESSAGES_DB), cfg.get("friends", []), now)
+        status["events"], report["calendar"] = read_calendar(cfg, now)
         payload["things"] = status
         report["things"] = {k: v for k, v in status.items() if k != "completed_ids"}
     if dry_run:
