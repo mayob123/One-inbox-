@@ -22,13 +22,21 @@ CREATE TABLE IF NOT EXISTS completed (
   uuid TEXT PRIMARY KEY,
   at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS quiet (
+  sender TEXT PRIMARY KEY,
+  at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
 """
 
-DECISIONS = {"add", "done", "later", "skip"}
+DECISIONS = {"add", "done", "none", "later", "skip"}  # later/skip: older pages
+
+
+def sender_key(item: dict) -> str:
+    return (item.get("from_addr") or item.get("sender") or "").strip().lower()
 
 
 def now_iso() -> str:
@@ -54,12 +62,14 @@ class Store:
         """Insert new items and refresh known ones. Ben's decisions are never overwritten.
 
         Items marked auto="things" (e-Boks, Aula, quick capture) are queued for Things the
-        first time they are seen. Ben can still untick them on the page before the Mac syncs.
+        first time they are seen, unless Ben said the sender needs no action. He can still
+        untick them on the page before the Mac syncs.
         """
         ts = now_iso()
         with self.lock:
+            quiet = {q["sender"] for q in self.db.execute("SELECT sender FROM quiet")}
             for it in items:
-                auto = it.get("auto") == "things"
+                auto = it.get("auto") == "things" and sender_key(it) not in quiet
                 self.db.execute(
                     """INSERT INTO items (id, data, status, received, seen_at, decision, decided_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -74,9 +84,15 @@ class Store:
     def items(self, limit_days: int | None = None) -> list[dict]:
         with self.lock:
             rows = self.db.execute("SELECT * FROM items ORDER BY received DESC").fetchall()
+            quiet = {q["sender"] for q in self.db.execute("SELECT sender FROM quiet")}
         out = []
         for r in rows:
             d = json.loads(r["data"])
+            muted = r["decision"] == "none" or (not r["decision"] and sender_key(d) in quiet)
+            if d.get("status") == "decide" and muted:
+                d["status"] = "noise"
+                d["why"] = "You said emails from this sender need no action."
+                d["quiet"] = sender_key(d)
             d["decision"] = r["decision"]
             d["queued_for_things"] = r["decision"] == "add" and not r["sent_to_things_at"]
             d["in_things"] = bool(r["sent_to_things_at"])
@@ -91,8 +107,31 @@ class Store:
                 "UPDATE items SET decision=?, decided_at=? WHERE id=? AND sent_to_things_at IS NULL",
                 (decision, now_iso() if decision else None, item_id),
             )
+            row = self.db.execute("SELECT data FROM items WHERE id=?", (item_id,)).fetchone()
+            key = sender_key(json.loads(row["data"])) if row else ""
+            if cur.rowcount == 1 and key:
+                if decision == "none":  # learn: future mail from this sender is folded away
+                    self.db.execute("INSERT OR REPLACE INTO quiet (sender, at) VALUES (?, ?)", (key, now_iso()))
+                else:
+                    self.db.execute("DELETE FROM quiet WHERE sender=?", (key,))
             self.db.commit()
             return cur.rowcount == 1
+
+    def unquiet(self, sender: str) -> bool:
+        """Stop folding a sender's mail, and bring back the emails already marked no action needed."""
+        key = sender.strip().lower()
+        with self.lock:
+            n = self.db.execute("DELETE FROM quiet WHERE sender=?", (key,)).rowcount
+            for r in self.db.execute("SELECT id, data FROM items WHERE decision='none'").fetchall():
+                if sender_key(json.loads(r["data"])) == key:
+                    self.db.execute("UPDATE items SET decision=NULL, decided_at=NULL WHERE id=?", (r["id"],))
+                    n += 1
+            self.db.commit()
+        return n > 0
+
+    def quiet_senders(self) -> list[str]:
+        with self.lock:
+            return [r["sender"] for r in self.db.execute("SELECT sender FROM quiet ORDER BY at DESC")]
 
     # --- outbox to Things (the Mac agent drains it) -----------------------
 
