@@ -136,3 +136,26 @@ The agent reads Calendar.app's database (read-only) for "up next" on the watch. 
 - Stop the Mac agent: `launchctl unload ~/Library/LaunchAgents/com.oneinbox.agent.plist`
 - Stop the Pi server: `sudo systemctl disable --now onebox`
 - Revoke the watch or agent: change the token in `/etc/onebox.env`, then `sudo systemctl restart onebox`
+
+## 7. Study calendar: sessions and deadlines into Things
+
+The agent can read your uni calendar feed and put it in Things, so the watch shows it:
+
+- **Live sessions, lectures, seminars**: a to-do on that day, titled with the start time ("19:00 Live session: Week 1"), with a Things reminder 15 minutes before. Added up to 14 days ahead.
+- **Deadlines**: a to-do that lands in Today 7 days before, with the Things deadline set to the due date, plus a "2 days left" nudge. Anything called due, deadline, submission, assignment, quiz or exam, or a zero-length event (how Moodle and Canvas export due dates), counts as a deadline.
+
+Get the feed link from the VLE's calendar (look for **Export calendar**, **Calendar feed** or **Subscribe**). It ends in `.ics` or starts with `webcal://`. It is private to you, so keep it only in `agent.json`. Then add to `~/.config/onebox/agent.json`:
+
+```json
+"calendars": [
+  {"name": "York MSc", "url": "webcal://…/calendar.ics", "list": "York MSc"}
+],
+"deadlines": [
+  {"title": "Module 1 assignment", "due": "2026-12-14", "list": "York MSc"}
+]
+```
+
+- `list` is a Things area or project. Make an area called **York MSc** so the watch marks these as MSc in discreet mode. Leave it out to use the Things Inbox.
+- `deadlines` is for dates that are only in a handbook or an email. Same heads-ups as the feed.
+
+Check what it would add with `python3 -m onebox.agent --dry-run` (see `calendar.would_add`). Each event is added once; the agent remembers them in `~/.config/onebox/calendar-seen.json`. If a session moves, the new time is added as a new to-do; tick off or delete the old one.

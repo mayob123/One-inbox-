@@ -22,6 +22,8 @@ One place for everything that needs Ben: mail, e-Boks and Aula alerts, bills, pl
 | Pretending to be a brand from the wrong domain, or asking for card details | **Likely scams** |
 | Newsletters, receipts, sign-in notices | Folded away |
 
+Study sessions and deadlines from your uni calendar feed go into Things too: sessions on the day with a reminder, deadlines a week ahead with a nudge two days before ([setup](docs/setup.md#7-study-calendar-sessions-and-deadlines-into-things)).
+
 Anything that isn't an email can be added from the box on the page or from Siri with an iPhone Shortcut ([setup](docs/setup.md#6-capture-anything-that-isnt-an-email)). It goes to Things Today too.
 
 The Pi also serves `/feed/watch.json` for the Pokémon buddy watch face: items left, next item, next bill, XP and the buddy's mood. Contract: [docs/watch-feed.md](docs/watch-feed.md).
@@ -41,6 +43,7 @@ python3 -m onebox.agent --dry-run    # on the Mac, prints what it would send
 | --- | --- |
 | `onebox/triage.py` | Rules that sort mail: done detection, scams, noise, areas |
 | `onebox/agent.py` | Mac agent: Mail and Things readers, sync with the Pi, adds to Things |
+| `onebox/studycal.py` | Calendar feeds and typed-in deadlines into Things |
 | `onebox/server.py` | Pi server: page, API, watch feed |
 | `onebox/store.py` | SQLite storage on the Pi |
 | `onebox/feed.py` | Watch feed and buddy mood |
