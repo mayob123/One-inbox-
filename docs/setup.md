@@ -165,6 +165,8 @@ If the job tracker app runs on the same Mac, the agent can mirror its **Apply ne
 - **Any other role in Apply next** (drafts, strong fits with no date): goes to the list with no date.
 - **An interview**: a to-do that day with a reminder an hour before, and a prep to-do the morning before.
 
+Once you file an application with `tools/file_application.py`, its to-dos link to the folder in `~/Documents/Job applications/`, so the CV, cover letter and archived posting are one click away (on the Mac).
+
 It uses the tracker's own rules, so "More leads", Danish-only roles (unless starred), closed, skipped and passed ones stay out.
 
 Add to `~/.config/onebox/agent.json`:

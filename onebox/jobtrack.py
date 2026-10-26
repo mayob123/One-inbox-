@@ -10,6 +10,9 @@ deadlines show in Today and on the watch:
   - any other role the tracker puts in Apply next: goes to the list with no date;
   - an interview: a to-do that day with a reminder an hour before, and a prep to-do the day before.
 
+Once an application has been filed (tools/file_application.py sets its archive_folder), the
+to-do's notes link to that folder, so the CV, cover letter and archived posting are one click away.
+
 Each to-do is added once. If a deadline changes, the new date is added again.
 When a role leaves Apply next (applied, skipped, closed) or an interview is over, the agent
 ticks its to-do off in Things. That needs the Things URL auth token in the config;
@@ -62,6 +65,7 @@ class Role:
     url: str = ""
     note: str = ""
     interview_at: datetime | date | None = None
+    folder: str = ""      # the application's folder in ~/Documents/Job applications, once filed
     passed: bool = False  # deadline gone; kept so its to-do stays open, never added anew
 
     @property
@@ -126,7 +130,8 @@ def read_roles(db_path: str, now: datetime, show_danish: bool = False) -> tuple[
             day = when.date() if isinstance(when, datetime) else when
             if day and day >= today:
                 roles.append(Role("interview", a["id"], a["company"], a["job_title"],
-                                  url=a.get("source_url") or "", interview_at=when))
+                                  url=a.get("source_url") or "", interview_at=when,
+                                  folder=a.get("archive_folder") or ""))
             continue
         if status != "saved":
             continue
@@ -136,7 +141,8 @@ def read_roles(db_path: str, now: datetime, show_danish: bool = False) -> tuple[
             continue
         roles.append(Role("draft", a["id"], a["company"], a["job_title"], deadline=parse_day(a.get("deadline")),
                           rolling=a.get("deadline_rolling") == 1, priority=a.get("priority") == 1,
-                          url=a.get("source_url") or "", note=a.get("deadline_note") or ""))
+                          url=a.get("source_url") or "", note=a.get("deadline_note") or "",
+                          folder=a.get("archive_folder") or ""))
 
     done = {f"job-tracker:draft:{a['id']}" for a in apps if a.get("status") in SENT}
     tracked = {((a.get("company") or "").strip().lower(), (a.get("job_title") or "").strip().lower()): a.get("status")
@@ -190,6 +196,8 @@ def notes_for(r: Role, tracker_url: str) -> str:
         parts.append(r.fit)
     if r.note:
         parts.append(r.note[:200])
+    if r.folder:  # CV, cover letter and the archived posting, one click away on the Mac
+        parts.append("Folder: file://" + urllib.parse.quote(str(Path(r.folder).expanduser())))
     if r.url:
         parts.append(r.url)
     parts.append(f"Tracker: {tracker_url}")

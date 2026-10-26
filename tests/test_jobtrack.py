@@ -26,7 +26,7 @@ def make_tracker(path):
     con.executescript("""
       CREATE TABLE applications (id INTEGER PRIMARY KEY, job_title TEXT, company TEXT, source_url TEXT,
         status TEXT, attachment_paths TEXT, deadline TEXT, deadline_rolling INTEGER DEFAULT 0,
-        priority INTEGER DEFAULT 0, deadline_note TEXT, interview_at TEXT, category TEXT, notes TEXT);
+        priority INTEGER DEFAULT 0, deadline_note TEXT, interview_at TEXT, category TEXT, notes TEXT, archive_folder TEXT);
       CREATE TABLE jobs (id INTEGER PRIMARY KEY, title TEXT, company TEXT, url TEXT, source TEXT,
         likely_closed INTEGER DEFAULT 0, danish_required INTEGER DEFAULT 0, fit_tier TEXT, dismissed INTEGER DEFAULT 0,
         deadline TEXT, deadline_rolling INTEGER DEFAULT 0, priority INTEGER DEFAULT 0, deadline_note TEXT);
@@ -52,6 +52,8 @@ def make_tracker(path):
             (15, "Sent role", "Sentco", "", "jobindex", "Strong fit", iso(3), 0, 0, 0, 0, 0),
             (16, "Skipped", "Nope", "", "jobindex", "Strong fit", iso(5), 0, 0, 0, 0, 1),
         ])
+    con.execute("UPDATE applications SET archive_folder = ? WHERE id = 4",
+                ("/Users/x/Documents/Job applications/Fundco - Grants Officer",))
     con.commit()
     con.close()
 
@@ -113,6 +115,8 @@ class JobTrackTests(unittest.TestCase):
         self.assertEqual(todos[0]["title"], "Interview 14:00: Fundco, Grants Officer")
         self.assertEqual(todos[0]["when"], iso(4) + "@13:00")
         self.assertEqual(todos[1]["when"], iso(3) + "@09:00")
+        self.assertIn("Folder: file:///Users/x/Documents/Job%20applications/Fundco%20-%20Grants%20Officer",
+                      todos[1]["notes"])
 
     def test_passed_deadline_is_never_added(self):
         new = jobtrack.new_roles(self.roles, {})
