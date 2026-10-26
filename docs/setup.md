@@ -25,6 +25,7 @@ The script creates a `onebox` system user, puts the app in `/opt/one-inbox`, wri
 | `ONEBOX_UI_KEY` | You, once per phone or browser, on the login page |
 | `ONEBOX_AGENT_TOKEN` | The Mac agent |
 | `ONEBOX_WATCH_TOKEN` | The watch face, sent as `X-OneInbox-Token` |
+| `ONEBOX_CAPTURE_TOKEN` | The "Add to One Inbox" iPhone Shortcut (section 6). Added to older installs on update. |
 
 Update later with `git pull && sudo ./deploy/install-pi.sh` (keys are kept). Logs: `journalctl -u onebox -f`.
 
@@ -77,7 +78,7 @@ chmod 600 ~/.config/onebox/agent.json
 
 `handles` are the phone numbers or emails exactly as Messages shows them. `friends` can stay empty for now.
 
-**Full Disk Access.** Mail, Messages and Things keep their data in protected folders. Open System Settings → Privacy & Security → Full Disk Access → `+`, press Cmd-Shift-G, type `/usr/bin/python3`, add it and switch it on.
+**Full Disk Access.** Mail, Messages, Things and Calendar keep their data in protected folders. Open System Settings → Privacy & Security → Full Disk Access → `+`, press Cmd-Shift-G, type `/usr/bin/python3`, add it and switch it on.
 
 Try it without sending anything:
 
@@ -102,6 +103,33 @@ Mail must have your accounts added (mac.com and Gmail already are). Spark can st
 Open the `ts.net` address in Safari, enter your UI key once, then Share → Add to Home Screen. It now opens like an app.
 
 Picks you mark **Add to Things** appear in your Things Inbox within 15 minutes (the Mac must be awake).
+
+## 6. Capture anything that isn't an email
+
+Type into the **Add a to-do** box at the top of the page, or make an iPhone Shortcut so Siri, the share sheet and Back Tap can add things. Either way it goes into Things for **Today** on the next Mac sync, so the watch shows it.
+
+In the Shortcuts app, make a new shortcut called **Add to One Inbox** (that name is what you say to Siri):
+
+1. **Ask for Input** (Text), prompt "What do you need to do?". If you want it in the share sheet too: turn on *Show in Share Sheet* in the shortcut's details, then use **If Shortcut Input has any value**, otherwise Ask for Input.
+2. **Get Contents of URL**: `https://<pi-name>.<tailnet>.ts.net/api/capture`, Method **POST**, Headers `Authorization` = `Bearer <ONEBOX_CAPTURE_TOKEN>`, Request Body **JSON** with one Text field `text` = the input from step 1.
+3. **Show Notification** with the result's `message` (optional).
+
+Try it: "Hey Siri, Add to One Inbox", then "Sign the Aula form for Friday". It appears on the page as "You added" with Add ticked. Untick it there before the next sync if you change your mind. Back Tap: Settings → Accessibility → Touch → Back Tap → Double Tap → Add to One Inbox.
+
+Tailscale must be on for the phone to reach the Pi.
+
+## 7. e-Boks, Digital Post and Aula reminders
+
+One Inbox never logs in to these (they need MitID). It works from their alert emails, so turn email alerts on:
+
+- **e-Boks** and **mit.dk / Digital Post**: in each app's settings, under notifications, turn on email notification for new post, to an address the Mac's Mail reads.
+- **Aula**: Profile → Settings → Notifications, turn on email for messages, and for events and posts if you want those too.
+
+A new alert from `e-boks.dk`, `mit.dk`, `digitalpost.dk`, `borger.dk` or `aula.dk` skips the yes/no step: it becomes a Things to-do for Today ("Read in Aula: …") and stays on the watch until you tick it. Lookalike senders are still flagged as scams, and alerts older than a week stay on the page instead, so the first sync doesn't flood Things.
+
+## 8. Calendar on the watch
+
+The agent reads Calendar.app's database (read-only) for "up next" on the watch. Every calendar Calendar.app shows counts: iCloud, Google, Exchange, and subscribed ones. For MSc lectures from an ICS link, use Calendar → File → New Calendar Subscription and paste the link. Leave calendars out with `"calendar_skip": ["Birthdays", "Work"]` in `agent.json` (the default skips Birthdays, Holidays and Siri Suggestions). `--dry-run` shows how many events it found.
 
 ## Turn things off
 
