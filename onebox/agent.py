@@ -6,7 +6,8 @@ Each run it:
   3. reads Things 3 (read-only) for today's count, next item, bills and XP,
      and Calendar (read-only) for the next few events,
   4. adds anything Ben marked "Add" on his phone to Things, via the Things URL scheme,
-  5. adds study sessions and deadlines from his calendar feeds to Things (studycal.py).
+  5. adds study sessions and deadlines from his calendar feeds to Things (studycal.py),
+  6. mirrors the job tracker's Apply next list and interviews into Things (jobtrack.py).
 
 Needs Full Disk Access for the Python that runs it (System Settings > Privacy & Security).
 Config: ~/.config/onebox/agent.json (see docs/setup.md).
@@ -25,7 +26,7 @@ import urllib.request
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
-from . import studycal
+from . import jobtrack, studycal
 from .triage import Message, summary, triage
 
 HOME = Path.home()
@@ -40,6 +41,7 @@ CALENDAR_DBS = (  # newer macOS first
 CALENDAR_SKIP = ("Birthdays", "Fødselsdage", "Holidays in Denmark", "Helligdage i Danmark", "Siri Suggestions")
 CONFIG_PATH = Path(os.environ.get("ONEBOX_AGENT_CONFIG", HOME / ".config/onebox/agent.json"))
 CALENDAR_SEEN = CONFIG_PATH.parent / "calendar-seen.json"
+JOBS_SEEN = CONFIG_PATH.parent / "jobs-seen.json"
 
 SKIP_MAILBOXES = ("junk", "spam", "trash", "deleted", "drafts", "blocked", "outbox")
 APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
@@ -321,6 +323,8 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
         report["would_send"] = len(items)
         if cfg.get("calendars") or cfg.get("deadlines"):
             report["calendar"] = calendar_preview(cfg, now)
+        if "job_tracker" in cfg:
+            report["jobs"] = sync_jobs(cfg, now, things_db, dry_run=True)
         return report
     call(cfg["server"], cfg["token"], "POST", "/api/ingest", payload)
     outbox = call(cfg["server"], cfg["token"], "GET", "/api/outbox").get("items", [])
@@ -329,6 +333,8 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
         call(cfg["server"], cfg["token"], "POST", "/api/outbox/ack", {"ids": [i["id"] for i in outbox]})
     report["added_to_things"] = len(outbox)
     report["calendar"] = sync_calendars(cfg, now)
+    if "job_tracker" in cfg:
+        report["jobs"] = sync_jobs(cfg, now, things_db)
     return report
 
 
@@ -354,6 +360,49 @@ def sync_calendars(cfg: dict, now: datetime) -> dict:
             seen[ev.key()] = now.date().isoformat()
     studycal.save_seen(seen_path, seen, now.date())
     return {"added": len(todos), "errors": errors}
+
+
+def sync_jobs(cfg: dict, now: datetime, things_db: str | None, dry_run: bool = False) -> dict:
+    """Job tracker -> Things. Stays on the Mac: nothing from the tracker is sent to the Pi."""
+    jc = cfg.get("job_tracker") or {}
+    db = jc.get("db", jobtrack.DEFAULT_DB)
+    list_name = jc.get("list", jobtrack.DEFAULT_LIST)
+    url = jc.get("tracker_url", jobtrack.DEFAULT_URL)
+    try:
+        roles, done = jobtrack.read_roles(db, now, jc.get("show_danish", False))
+    except Exception as e:  # tracker missing or busy shouldn't stop mail sync
+        return {"error": f"job tracker: {e}"}
+    seen_path = Path(jc.get("seen", JOBS_SEEN))
+    seen = studycal.load_seen(seen_path)
+    new = jobtrack.new_roles(roles, seen)
+    todos = jobtrack.things_json(new, now.date(), list_name, url)
+    try:
+        open_todos = jobtrack.open_todos(things_db) if things_db else []
+    except sqlite3.Error:
+        open_todos = []
+    tidy = jobtrack.tidy(roles, done, open_todos)
+    token = cfg.get("things_auth_token", "")
+    if dry_run:
+        return {"roles": len(roles), "would_add": [t["attributes"]["title"] for t in todos],
+                "would_complete": len(tidy["completed"]), "would_cancel": len(tidy["canceled"])}
+    closed = 0
+    if token:
+        for how, uuids in tidy.items():
+            for uuid in uuids:
+                subprocess.run(["open", "-g", jobtrack.update_url(uuid, token, how)], check=True)
+                closed += 1
+    if todos:
+        subprocess.run(["open", "-g", "things:///json?data=" + urllib.parse.quote(json.dumps(todos))], check=True)
+        for r in new:
+            seen[r.key()] = now.date().isoformat()
+    for r in roles:  # keep live roles fresh so the 60-day pruning never re-adds one
+        if r.key() in seen:
+            seen[r.key()] = now.date().isoformat()
+    studycal.save_seen(seen_path, seen, now.date())
+    out = {"added": len(todos), "closed": closed}
+    if not token and any(tidy.values()):
+        out["stale"] = sum(len(v) for v in tidy.values())
+    return out
 
 
 def main(argv: list[str] = sys.argv[1:]) -> None:
