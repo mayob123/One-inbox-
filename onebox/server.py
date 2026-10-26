@@ -125,7 +125,8 @@ def make_handler(cfg: Config, store: Store):
             path = urlparse(self.path).path
             if path == "/login":
                 n = min(int(self.headers.get("Content-Length") or 0), 4096)
-                key = parse_qs(self.rfile.read(n).decode(errors="replace")).get("key", [""])[0]
+                key = parse_qs(self.rfile.read(n).decode(errors="replace")).get("key", [""])[0].strip()
+                key = key.removeprefix("ONEBOX_UI_KEY=").strip()  # pasted straight from /etc/onebox.env
                 if not _same(key, cfg.ui_key):
                     return self._send(401, b"Wrong key. Go back and try again.", "text/plain; charset=utf-8")
                 secure = "; Secure" if self.headers.get("X-Forwarded-Proto") == "https" else ""

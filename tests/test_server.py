@@ -75,6 +75,7 @@ class ServerTests(unittest.TestCase):
         self.assertIn(b"Your key", body)
         self.assertEqual(self.web.req(self.base, "POST", "/login", form={"key": "wrong"})[0], 401)
         self.assertEqual(self.web.req(self.base, "POST", "/login", form={"key": "u" * 20})[0], 303)
+        self.assertEqual(self.web.req(self.base, "POST", "/login", form={"key": " ONEBOX_UI_KEY=" + "u" * 20 + " "})[0], 303)
         self.assertEqual(self.web.req(self.base, "GET", "/api/items")[0], 200)
 
     def test_agent_token_required(self):
