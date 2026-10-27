@@ -162,6 +162,8 @@ class AgentTests(unittest.TestCase):
 
     def test_kind_of_prefers_tags(self):
         self.assertEqual(agent.kind_of("Pay rent", tags="Kids"), "school")
+        self.assertEqual(agent.kind_of("Pay rent", tags="Family"), "school")
+        self.assertEqual(agent.kind_of("Book the doctor for Oscar"), "school")
         self.assertEqual(agent.kind_of("Pay rent", tags="Dansk|x"), "danish")
         self.assertEqual(agent.kind_of("Pay rent", tags=None), "bill")
         self.assertEqual(agent.kind_of("Apply to Lundbeck", tags="Job search"), "job")

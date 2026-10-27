@@ -112,16 +112,18 @@ def from_things_date(v: int) -> date:
 
 
 KIND_WORDS = [("bill", "bill"), ("pay", "bill"), ("betal", "bill"), ("school", "school"), ("kids", "school"),
-              ("aula", "school"), ("york", "msc"), ("msc", "msc"), ("job", "job"), ("danish", "danish"),
+              ("aula", "school"), ("family", "school"), ("doctor", "school"), ("lægen", "school"),
+              ("york", "msc"), ("msc", "msc"), ("job", "job"), ("danish", "danish"),
               ("dansk", "danish"), ("friend", "friend"), ("travel", "travel"), ("trip", "travel"),
               ("admin", "admin")]
 
 
 # One Things tag per Pocket Pal pillar. A tag decides the pillar; words in the title are only a guess.
-PILLAR_TAGS = {"danish": "Danish", "msc": "MSc", "job": "Job hunt", "school": "Kids", "admin": "Home admin",
+PILLAR_TAGS = {"danish": "Danish", "msc": "MSc", "job": "Job hunt", "school": "Family", "admin": "Home admin",
                "friend": "Friends", "body": "Body"}
 TAG_KINDS = {**{tag.lower(): kind for kind, tag in PILLAR_TAGS.items()},
-             "dansk": "danish", "york": "msc", "job": "job", "job search": "job", "school": "school", "admin": "admin",
+             "kids": "school", "dansk": "danish", "york": "msc", "job": "job", "job search": "job", "school": "school",
+             "admin": "admin",
              "payment": "admin", "budget": "admin",
              "bills": "bill", "bill": "bill", "friend": "friend", "health": "body", "fitness": "body"}
 

@@ -1,5 +1,9 @@
 name: tests
-on: [push, pull_request]
+# Pushes to claude/v1 and pull requests, so a PR commit runs once, not twice.
+on:
+  push:
+    branches: [claude/v1]
+  pull_request:
 jobs:
   test:
     runs-on: ubuntu-24.04  # Python 3.9 (the Mac's Xcode Python) is not built for newer Ubuntu images
