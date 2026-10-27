@@ -182,6 +182,24 @@ class AgentTests(unittest.TestCase):
         with open(tagged) as f:
             self.assertEqual(json.load(f), {"t1": "Danish", "t2": "Home admin"})
 
+    def test_wake_mail_starts_mail_only_when_closed(self):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return type("R", (), {"returncode": 1 if cmd[0] == "pgrep" else 0})()
+
+        real_run, real_platform = agent.subprocess.run, agent.sys.platform
+        agent.subprocess.run, agent.sys.platform = fake_run, "darwin"
+        try:
+            self.assertTrue(agent.wake_mail({}))
+            self.assertEqual(calls[-1], ["open", "-g", "-j", "-a", "Mail"])
+            calls.clear()
+            self.assertFalse(agent.wake_mail({"keep_mail_open": False}))
+            self.assertEqual(calls, [])
+        finally:
+            agent.subprocess.run, agent.sys.platform = real_run, real_platform
+
     def test_things_done_url(self):
         url = agent.things_done_url("ABC123", "tok&en")
         q = urllib.parse.parse_qs(url.split("?", 1)[1])

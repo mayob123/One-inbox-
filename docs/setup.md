@@ -97,7 +97,7 @@ launchctl load ~/Library/LaunchAgents/com.oneinbox.agent.plist
 tail -f /tmp/onebox-agent.log
 ```
 
-Mail must have your accounts added (mac.com and Gmail already are). Spark can stay your reading app; the agent reads Mail's index, which syncs in the background.
+Mail only downloads new mail while it's open, so the agent starts it hidden in the background whenever it finds it closed (turn that off with `"keep_mail_open": false` in `agent.json`). Mail must have your accounts added (mac.com and Gmail already are). Spark can stay your reading app; the agent reads Mail's index, which syncs in the background.
 
 ## 5. On your iPhone
 

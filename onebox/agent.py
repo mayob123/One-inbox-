@@ -447,9 +447,22 @@ def load_config() -> dict:
     return cfg
 
 
+def wake_mail(cfg: dict) -> bool:
+    """Mail only fetches new messages (and so updates the index we read) while it is open.
+    Start it hidden in the background if it isn't running. Returns True if it had to be started."""
+    if not cfg.get("keep_mail_open", True) or sys.platform != "darwin":
+        return False
+    if subprocess.run(["pgrep", "-xq", "Mail"]).returncode == 0:
+        return False
+    subprocess.run(["open", "-g", "-j", "-a", "Mail"])
+    return True
+
+
 def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> dict:
     now = now or datetime.now().astimezone()
     report: dict = {}
+    if not dry_run and wake_mail(cfg):
+        report["mail_started"] = "Mail wasn't open, so new mail wasn't arriving. Started it in the background."
     mail_db = cfg.get("mail_db") or newest(MAIL_GLOB)
     items = []
     if mail_db:
