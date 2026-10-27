@@ -1,8 +1,9 @@
 """The Mac side of One Inbox. Runs every 15 minutes from launchd.
 
 Each run it:
-  1. reads mail headers from Mail's local index (read-only, no bodies),
-  2. sorts them (triage.py) and sends the result to the Pi,
+  1. reads mail headers from Mail's local index (read-only),
+  2. sorts them (triage.py), reads the body of the few that need Ben (links, attachments, a short excerpt)
+     and sends the result to the Pi,
   3. reads Things 3 (read-only) for today's count, next item, bills and XP,
      Calendar (read-only) for the next few events, and the job tracker (read-only) for
      interviews and application deadlines,
@@ -15,9 +16,14 @@ Config: ~/.config/onebox/agent.json (see docs/setup.md).
 
 from __future__ import annotations
 
+import email
+import email.policy
 import glob
+import html
 import json
 import os
+import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -44,9 +50,11 @@ CONFIG_PATH = Path(os.environ.get("ONEBOX_AGENT_CONFIG", HOME / ".config/onebox/
 CALENDAR_SEEN = CONFIG_PATH.parent / "calendar-seen.json"
 JOB_TRACKER_DB = str(HOME / "Documents/job-tracker/data/job_tracker.db")
 JOB_LEADS = ("Strong fit", "Possible fit")  # job tracker fit tiers worth a deadline nudge
+LEADS_SHOWN = 5  # the best open leads the phone lists on the job hunt page
 
 SKIP_MAILBOXES = ("junk", "spam", "trash", "deleted", "drafts", "blocked", "outbox")
 APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
+ICLOUD = HOME / "Library/Mobile Documents/com~apple~CloudDocs"
 
 
 def ro_connect(path: str) -> sqlite3.Connection:
@@ -101,6 +109,121 @@ def read_mail(db_path: str, days: int = 21, account_labels: dict | None = None,
             account=labels.get(account_key, "mail"), unread=not r["read"],
         ))
     return out
+
+
+# --- Mail bodies: the details of the emails that need Ben ----------------
+
+DETAIL_DAYS = 7      # only recent emails get their body read
+DETAIL_MAX = 30      # and at most this many per run
+EXCERPT_MAX = 1200
+LINKS_MAX = 12
+URL = re.compile(r"https?://[^\s<>\"')\]]+")
+SKIP_LINK = re.compile(r"unsubscribe|afmeld|\.(png|jpe?g|gif)(\?|$)|/track/|list-manage|mailchimp", re.I)
+# Where a reply's quoted history starts: "On Tue, ... wrote:", "Den ... skrev ...:", a ">" line, Outlook's "From:".
+HTML_QUOTE = re.compile(r'<blockquote|class="gmail_quote|id="divRplyFwdMsg|id="appendonsend', re.I)
+QUOTE = re.compile(r"^(On .+wrote:|Den .+skrev.*:|>|-----Original Message|From: .+|Fra: .+)", re.M)
+
+
+def emlx_files(mail_dir: str, rowids: set[str]) -> tuple[dict, dict]:
+    """Finds each message's .emlx and its downloaded attachments under ~/Library/Mail/V*, by rowid."""
+    bodies, attachments = {}, {}
+    for root, dirs, files in os.walk(mail_dir):
+        base = os.path.basename(root)
+        if base in rowids and os.path.basename(os.path.dirname(root)) == "Attachments":
+            for sub, _, names in os.walk(root):
+                attachments.setdefault(base, []).extend(os.path.join(sub, n) for n in names if not n.startswith("."))
+        for f in files:
+            if f.endswith(".emlx"):
+                rid = f.split(".", 1)[0]
+                if rid in rowids:
+                    bodies[rid] = os.path.join(root, f)
+    return bodies, attachments
+
+
+def parse_emlx(path: str) -> email.message.EmailMessage:
+    """An .emlx is a byte count line, the raw message, then an Apple plist."""
+    with open(path, "rb") as fh:
+        n = int(fh.readline().strip() or 0)
+        raw = fh.read(n)
+    return email.message_from_bytes(raw, policy=email.policy.default)
+
+
+def message_details(msg: email.message.EmailMessage) -> dict:
+    """The new part of the text (not the quoted history), its links, attachment names and Message-ID."""
+    plain, rich = "", ""
+    names = []
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+        name = part.get_filename()
+        if name:
+            names.append(name)
+            continue
+        try:
+            text = part.get_content()
+        except (LookupError, ValueError):
+            continue
+        if part.get_content_type() == "text/plain" and not plain:
+            plain = text
+        elif part.get_content_type() == "text/html" and not rich:
+            rich = text
+    q = HTML_QUOTE.search(rich)
+    rich = rich[:q.start()] if q else rich
+    if not plain and rich:
+        plain = html.unescape(re.sub(r"<[^>]+>", " ", re.sub(r"(?is)<(style|script).*?</\1>|<br\s*/?>|</p>", "\n", rich)))
+    m = QUOTE.search(plain)
+    text = (plain[:m.start()] if m else plain).strip()
+    links = URL.findall(text) + re.findall(r'href="(https?://[^"]+)"', rich)
+    text = re.sub(r"[ \t]+", " ", re.sub(r"\n\s*\n+", "\n\n", text))
+    seen, keep = set(), []
+    for link in links:
+        link = html.unescape(link).rstrip(".,;")
+        if link not in seen and not SKIP_LINK.search(link):
+            seen.add(link)
+            keep.append(link)
+    mid = (msg.get("Message-ID") or "").strip().strip("<>")
+    return {"excerpt": text[:EXCERPT_MAX], "links": keep[:LINKS_MAX], "attachments": names,
+            "message_id": mid}
+
+
+def mail_link(message_id: str) -> str:
+    """Opens the email in Mail, on the Mac or the iPhone."""
+    return "message:" + urllib.parse.quote(f"<{message_id}>", safe="@") if message_id else ""
+
+
+def add_details(items: list[dict], mail_db: str, now: datetime, save_to: Path | None = ICLOUD) -> int:
+    """Reads the body of recent emails that need Ben, and copies a homework email's attachments to
+    iCloud Drive > One Inbox > <kind> so they open on the phone. Returns how many got details."""
+    want = [it for it in items if it.get("status") == "decide" and it.get("ref", "").count(":") == 1
+            and now - datetime.fromisoformat(it["received"]) <= timedelta(days=DETAIL_DAYS)][:DETAIL_MAX]
+    if not want:
+        return 0
+    rowids = {it["ref"].rsplit(":", 1)[1] for it in want}
+    mail_dir = os.path.dirname(os.path.dirname(mail_db))
+    bodies, files = emlx_files(mail_dir, rowids)
+    n = 0
+    for it in want:
+        rid = it["ref"].rsplit(":", 1)[1]
+        if rid not in bodies:
+            continue
+        try:
+            d = message_details(parse_emlx(bodies[rid]))
+        except (OSError, ValueError):
+            continue
+        d["mail_link"] = mail_link(d.pop("message_id"))
+        if save_to and it.get("auto") and files.get(rid) and save_to.is_dir():
+            folder = save_to / "One Inbox" / (it.get("area") or "Mail")
+            folder.mkdir(parents=True, exist_ok=True)
+            saved = []
+            for src in files[rid]:
+                dest = folder / os.path.basename(src)
+                if not dest.exists():
+                    shutil.copy2(src, dest)
+                saved.append(f"iCloud Drive > One Inbox > {folder.name} > {dest.name}")
+            d["saved"] = saved
+        it.update(d)
+        n += 1
+    return n
 
 
 # --- Things --------------------------------------------------------------
@@ -161,6 +284,21 @@ def tags_col(con) -> str:
 TODAY_MAX = 40  # enough for any real Today list, and keeps the phone feed small
 
 
+NOTES_MAX = 2000  # a to-do's notes as the phone shows them
+
+
+def notes_col(con) -> str:
+    cols = {r[1] for r in con.execute("PRAGMA table_info(TMTask)")}
+    return "COALESCE(t.notes, '')" if "notes" in cols else "''"
+
+
+def things_text(notes: str) -> str:
+    """Things keeps newer notes as a little XML document; the phone wants the plain text."""
+    if notes.lstrip().startswith("<note"):
+        notes = html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"</p>|<br\s*/?>", "\n", notes)))
+    return notes.strip()
+
+
 def things_status(db_path: str, now: datetime) -> dict:
     today = now.date()
     t_today = things_date(today)
@@ -168,7 +306,8 @@ def things_status(db_path: str, now: datetime) -> dict:
     con = ro_connect(db_path)
     try:
         open_today = con.execute(
-            f"""SELECT t.uuid, t.title, t.deadline, COALESCE(a.title, pa.title, '') AS area,
+            f"""SELECT t.uuid, t.title, t.deadline, {notes_col(con)} AS notes,
+                      COALESCE(a.title, pa.title, '') AS area,
                       COALESCE(p.title, '') AS project, {tags_col(con)}
                FROM TMTask t
                LEFT JOIN TMArea a ON a.uuid = t.area
@@ -208,7 +347,8 @@ def things_status(db_path: str, now: datetime) -> dict:
             break
     first = open_today[0] if open_today else None
     today_list = [{"id": t["uuid"], "title": t["title"], "kind": kind_of(t["title"], t["area"], t["project"], tags=t["tags"]),
-                   "due": from_things_date(t["deadline"]).isoformat() if t["deadline"] else None}
+                   "due": from_things_date(t["deadline"]).isoformat() if t["deadline"] else None,
+                   "notes": things_text(t["notes"])[:NOTES_MAX] or None}
                   for t in open_today[:TODAY_MAX]]
     return {
         "at": now.isoformat(timespec="seconds"),
@@ -337,6 +477,14 @@ def job_tracker(db_path: str, now: datetime, days: int = 14) -> tuple[list[dict]
                 WHERE COALESCE(dismissed, 0) = 0 AND COALESCE(likely_closed, 0) = 0 AND fit_tier IN ({marks})""",
             (today.isoformat(), *JOB_LEADS)).fetchone()
         applied = con.execute("SELECT COUNT(*) FROM applications WHERE date_applied >= ?", (monday,)).fetchone()[0]
+        cols = {r[1] for r in con.execute("PRAGMA table_info(jobs)")}
+        link = next((c for c in ("url", "link", "job_url", "apply_url") if c in cols), None)
+        lead_rows = con.execute(
+            f"""SELECT title, company, deadline, {link or 'NULL'} AS url FROM jobs
+                WHERE COALESCE(dismissed, 0) = 0 AND COALESCE(likely_closed, 0) = 0 AND fit_tier IN ({marks})
+                  AND (deadline IS NULL OR deadline >= ?)
+                ORDER BY deadline IS NULL, deadline, fit_tier LIMIT ?""",
+            (*JOB_LEADS, today.isoformat(), LEADS_SHOWN)).fetchall()
     finally:
         con.close()
     events = []
@@ -348,7 +496,8 @@ def job_tracker(db_path: str, now: datetime, days: int = 14) -> tuple[list[dict]
         events.append({"title": f"Interview: {r['company']}", "start": start.isoformat(timespec="minutes")})
     dues = [d for d in (app_due, lead_due) if d]
     extra = {"applied_week": applied, "leads": leads, "job_due": min(dues) if dues else None,
-             "interview_at": events[0]["start"] if events else None}
+             "interview_at": events[0]["start"] if events else None,
+             "lead_list": [{k: r[k] for k in ("title", "company", "deadline", "url") if r[k]} for r in lead_rows]}
     return events, extra
 
 
@@ -411,14 +560,24 @@ def call(server: str, token: str, method: str, path: str, body: dict | None = No
         return json.loads(r.read() or b"{}")
 
 
+def things_notes(it: dict) -> str:
+    """What the to-do says in Things: the links and files first, so they're a tap away, then the email."""
+    lines = [*it.get("links", []), *it.get("saved", [])]
+    if it.get("mail_link"):
+        lines.append(f"Open the email: {it['mail_link']}")
+    if lines:
+        lines.append("")
+    lines += [it["title"], f"From {it.get('sender', '')}, {it['received'][:10]}"]
+    if it.get("excerpt"):
+        lines += ["", it["excerpt"]]
+    lines += ["", f"Area: {it.get('area', '')}", "(added by One Inbox)"]
+    return "\n".join(lines)[:4000]
+
+
 def things_add_url(items: list[dict]) -> str:
     todos = []
     for it in items:
-        attrs = {
-            "title": it["task"],
-            "notes": f"{it['title']}\nFrom {it.get('sender', '')}, {it['received'][:10]}\n{it.get('why', '')}\n"
-                     f"Area: {it.get('area', '')}\n(added by One Inbox)",
-        }
+        attrs = {"title": it["task"], "notes": things_notes(it)}
         if it.get("auto"):  # e-Boks, Aula and quick captures go to Today, so the watch shows them
             attrs["when"] = "today"
         todos.append({"type": "to-do", "attributes": attrs})
@@ -531,6 +690,10 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
         triaged = triage(msgs, now)
         items = [i.to_dict() for i in triaged]
         report["mail"] = summary(triaged)
+        try:
+            report["mail_details"] = add_details(items, mail_db, now, None if dry_run else ICLOUD)
+        except OSError as e:  # never let a body we can't read stop the sync
+            report["mail_details"] = f"Couldn't read mail bodies: {e}"
     else:
         report["mail"] = "Mail index not found. Is Full Disk Access on?"
     payload: dict = {"items": items}

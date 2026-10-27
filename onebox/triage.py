@@ -124,6 +124,8 @@ OFFICIAL_POST = {
     "Aula": ("aula.dk",),
 }
 AUTO_ADD_DAYS = 7  # older alerts stay on the page, so a first sync doesn't flood Things
+# Homework from the Danish teacher goes straight to Things for today, like official post.
+HOMEWORK = re.compile(r"lektie|homework|hjemmearbejde|opgave", re.I)
 
 SUBJECT_PREFIX = re.compile(r"^\s*((re|fwd?|fw|sv|vs|aw|vb|accepted|declined|opdateret invitation)\s*:\s*)+", re.I)
 
@@ -168,6 +170,7 @@ class Item:
     evidence: list = field(default_factory=list)
     auto: str = ""  # "things": the Pi queues it for Things as soon as it first sees it
     from_addr: str = ""  # sender's address, used to remember "no action needed"
+    ref: str = ""  # the message in Mail (account:rowid), so the Mac can read its body for details
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -319,7 +322,7 @@ def triage(messages: list[Message], now: datetime | None = None) -> list[Item]:
             id=item_id(msg), title=msg.subject or "(no subject)", task=suggest_task(msg, kind),
             area=area, kind=kind, source=msg.account or "mail",
             sender=msg.sender_name or msg.sender_addr, received=msg.received.isoformat(),
-            lang=language(msg), from_addr=msg.sender_addr.lower(),
+            lang=language(msg), from_addr=msg.sender_addr.lower(), ref=msg.msg_id,
         )
         scam = is_scam(msg)
         if scam:
@@ -334,6 +337,13 @@ def triage(messages: list[Message], now: datetime | None = None) -> list[Item]:
             fresh = now - msg.received <= timedelta(days=AUTO_ADD_DAYS)
             base["task"] = _cut(f"Read in {post}: {base['title']}")
             why = f"New in {post}. " + ("Added to Things for today." if fresh else "Older than a week, so not added.")
+            items.append(Item(status="decide", why=why, auto="things" if fresh else "", **base))
+            continue
+        if kind == "danish" and HOMEWORK.search(msg.subject):
+            fresh = now - msg.received <= timedelta(days=AUTO_ADD_DAYS)
+            base["task"] = _cut(f"Danish homework: {normalize_subject(msg.subject).capitalize()}")
+            why = f"Homework from {base['sender']}. " + ("Added to Things for today, with its links."
+                                                        if fresh else "Older than a week, so not added.")
             items.append(Item(status="decide", why=why, auto="things" if fresh else "", **base))
             continue
         if SECURITY_NOTICE.search(msg.subject):
