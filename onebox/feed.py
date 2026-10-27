@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 FEED_VERSION = 1
 NEXT_MAX = 20
-KINDS = {"bill", "school", "admin", "msc", "job", "danish", "friend", "travel", "other"}
+KINDS = {"bill", "school", "admin", "msc", "job", "danish", "friend", "body", "travel", "other"}
 
 
 def short(text: str | None, limit: int = NEXT_MAX) -> str | None:

@@ -117,12 +117,40 @@ KIND_WORDS = [("bill", "bill"), ("pay", "bill"), ("betal", "bill"), ("school", "
               ("admin", "admin")]
 
 
-def kind_of(*texts: str) -> str:
+# One Things tag per Pocket Pal pillar. A tag decides the pillar; words in the title are only a guess.
+PILLAR_TAGS = {"danish": "Danish", "msc": "MSc", "job": "Job hunt", "school": "Kids", "admin": "Home admin",
+               "friend": "Friends", "body": "Body"}
+TAG_KINDS = {**{tag.lower(): kind for kind, tag in PILLAR_TAGS.items()},
+             "dansk": "danish", "york": "msc", "job": "job", "job search": "job", "school": "school", "admin": "admin",
+             "payment": "admin", "budget": "admin",
+             "bills": "bill", "bill": "bill", "friend": "friend", "health": "body", "fitness": "body"}
+
+
+def tag_kind(tags: str | None) -> str | None:
+    """The pillar a to-do's Things tags put it in ("Job hunt|Errand" -> job), or None."""
+    for tag in (tags or "").split("|"):
+        if tag.strip().lower() in TAG_KINDS:
+            return TAG_KINDS[tag.strip().lower()]
+    return None
+
+
+def kind_of(*texts: str, tags: str | None = None) -> str:
+    if kind := tag_kind(tags):
+        return kind
     hay = " ".join(t for t in texts if t).lower()
     for word, kind in KIND_WORDS:
         if word in hay:
             return kind
     return "other"
+
+
+def tags_col(con) -> str:
+    """Each to-do's tags and its project's, joined with |. Empty on a database without tags."""
+    has = con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'TMTaskTag'").fetchone()
+    if not has:
+        return "'' AS tags"
+    return """(SELECT group_concat(g.title, '|') FROM TMTaskTag tt JOIN TMTag g ON g.uuid = tt.tags
+              WHERE tt.tasks = t.uuid OR tt.tasks = t.project) AS tags"""
 
 
 TODAY_MAX = 40  # enough for any real Today list, and keeps the phone feed small
@@ -135,7 +163,8 @@ def things_status(db_path: str, now: datetime) -> dict:
     con = ro_connect(db_path)
     try:
         open_today = con.execute(
-            """SELECT t.uuid, t.title, t.deadline, COALESCE(a.title, pa.title, '') AS area, COALESCE(p.title, '') AS project
+            f"""SELECT t.uuid, t.title, t.deadline, COALESCE(a.title, pa.title, '') AS area,
+                      COALESCE(p.title, '') AS project, {tags_col(con)}
                FROM TMTask t
                LEFT JOIN TMArea a ON a.uuid = t.area
                LEFT JOIN TMTask p ON p.uuid = t.project
@@ -156,7 +185,7 @@ def things_status(db_path: str, now: datetime) -> dict:
             (midnight - 3 * 86400,))]
         week = things_date(today + timedelta(days=7))
         bills = con.execute(
-            """SELECT t.title, t.deadline, COALESCE(a.title, pa.title, '') AS area
+            f"""SELECT t.title, t.deadline, COALESCE(a.title, pa.title, '') AS area, {tags_col(con)}
                FROM TMTask t
                LEFT JOIN TMArea a ON a.uuid = t.area
                LEFT JOIN TMTask p ON p.uuid = t.project
@@ -168,12 +197,12 @@ def things_status(db_path: str, now: datetime) -> dict:
         con.close()
     bill = None
     for b in bills:
-        if kind_of(b["title"], b["area"]) == "bill":
+        if kind_of(b["title"], b["area"], tags=b["tags"]) == "bill":
             d = from_things_date(b["deadline"])
             bill = d.strftime("%a") if 0 <= (d - today).days < 7 else d.strftime("%-d %b")
             break
     first = open_today[0] if open_today else None
-    today_list = [{"id": t["uuid"], "title": t["title"], "kind": kind_of(t["title"], t["area"], t["project"]),
+    today_list = [{"id": t["uuid"], "title": t["title"], "kind": kind_of(t["title"], t["area"], t["project"], tags=t["tags"]),
                    "due": from_things_date(t["deadline"]).isoformat() if t["deadline"] else None}
                   for t in open_today[:TODAY_MAX]]
     return {
@@ -184,7 +213,7 @@ def things_status(db_path: str, now: datetime) -> dict:
         "overdue": overdue,
         "next": first["title"] if first else None,
         "next_id": first["uuid"] if first else None,
-        "next_kind": kind_of(first["title"], first["area"], first["project"]) if first else None,
+        "next_kind": kind_of(first["title"], first["area"], first["project"], tags=first["tags"]) if first else None,
         "bill": bill,
         "today": today_list,
     }
@@ -204,8 +233,8 @@ def things_pillars(db_path: str, now: datetime) -> dict:
               LEFT JOIN TMArea a ON a.uuid = t.area
               LEFT JOIN TMTask p ON p.uuid = t.project
               LEFT JOIN TMArea pa ON pa.uuid = p.area"""
-    cols = "t.title, COALESCE(a.title, pa.title, '') AS area, COALESCE(p.title, '') AS project"
     con = ro_connect(db_path)
+    cols = f"t.title, COALESCE(a.title, pa.title, '') AS area, COALESCE(p.title, '') AS project, {tags_col(con)}"
     try:
         open_rows = con.execute(f"SELECT {cols}, t.deadline {join} "
                                 "WHERE t.type = 0 AND t.status = 0 AND t.trashed = 0 AND t.start != 2").fetchall()
@@ -217,7 +246,7 @@ def things_pillars(db_path: str, now: datetime) -> dict:
     out: dict = {}
 
     def entry(r) -> dict:
-        k = kind_of(r["title"], r["area"], r["project"])
+        k = kind_of(r["title"], r["area"], r["project"], tags=r["tags"])
         return out.setdefault(k, {"done_week": 0, "open": 0, "last_done": None, "next_due": None})
 
     for r in open_rows:
@@ -357,6 +386,59 @@ def complete_in_things(cfg: dict, dry_run: bool = False) -> int | str:
     return len(ids)
 
 
+TAGGED = Path.home() / ".config" / "onebox" / "tagged.json"
+
+
+def untagged_guesses(db_path: str) -> list[tuple[str, str]]:
+    """Open to-dos with no pillar tag whose title, area or project points at a pillar: (uuid, tag)."""
+    con = ro_connect(db_path)
+    try:
+        rows = con.execute(
+            f"""SELECT t.uuid, t.title, COALESCE(a.title, pa.title, '') AS area, COALESCE(p.title, '') AS project,
+                       {tags_col(con)}
+                FROM TMTask t
+                LEFT JOIN TMArea a ON a.uuid = t.area
+                LEFT JOIN TMTask p ON p.uuid = t.project
+                LEFT JOIN TMArea pa ON pa.uuid = p.area
+                WHERE t.type = 0 AND t.status = 0 AND t.trashed = 0""").fetchall()
+    finally:
+        con.close()
+    out = []
+    for r in rows:
+        if tag_kind(r["tags"]):
+            continue
+        kind = kind_of(r["title"], r["area"], r["project"])
+        tag = PILLAR_TAGS.get("admin" if kind == "bill" else kind)
+        if tag:
+            out.append((r["uuid"], tag))
+    return out
+
+
+def things_tag_url(uuid: str, tag: str, auth_token: str) -> str:
+    return "things:///update?" + urllib.parse.urlencode({"id": uuid, "add-tags": tag, "auth-token": auth_token})
+
+
+def tag_in_things(cfg: dict, db_path: str, limit: int = 20) -> int | str:
+    """Writes the pillar the agent guessed back to Things as a tag, so Things and the app agree and a wrong
+    guess is fixed by changing the tag. Each to-do is tagged once: one Ben untags stays untagged.
+    Only with "auto_tag": true in agent.json."""
+    if not cfg.get("auto_tag"):
+        return 0
+    token = cfg.get("things_auth_token", "")
+    if not token:
+        return "add things_auth_token to agent.json to tag to-dos"
+    path = Path(cfg.get("tagged", TAGGED))
+    done = json.loads(path.read_text()) if path.exists() else {}
+    todo = [(u, t) for u, t in untagged_guesses(db_path) if u not in done][:limit]
+    for uuid, tag in todo:
+        subprocess.run(["open", "-g", things_tag_url(uuid, tag, token)], check=True)
+        done[uuid] = tag
+    if todo:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(done, indent=1))
+    return len(todo)
+
+
 def load_config() -> dict:
     cfg = json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
     cfg.setdefault("server", os.environ.get("ONEBOX_SERVER", "http://inbox.home:8787"))
@@ -399,6 +481,8 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
     report["added_to_things"] = len(outbox)
     report["completed_in_things"] = complete_in_things(cfg)
     report["calendar"] = sync_calendars(cfg, now)
+    if things_db:
+        report["tagged_in_things"] = tag_in_things(cfg, things_db)
     return report
 
 
