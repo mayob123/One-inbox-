@@ -44,6 +44,11 @@ Agreed 2026-10-26 between One Inbox (the Pi side) and the Pokémon buddy watch f
 | `event_at` | string or null | Its local start time: `"14:00"` if today, `"Tue 09:00"` if tomorrow. null with `event`. |
 | `event_ts` | int or null | `event`'s start as Unix epoch seconds, for a countdown. Added 2026-10-26. |
 | `now_id` | string or null | Things id of the item in `next` (the NOW item, after any done or skip below). null when `next` is null or the Mac agent is too old to send ids. Added 2026-10-26. |
+| `pal_line` | string or null | Lyra's line from the phone, max 24 characters, e.g. `"DANISH 1/3 THIS WEEK"`. Added 2026-10-27. |
+| `pal_pose` | string or null | Lyra's pose from the phone (`happy`, `sit`, `proud`, `sleepy`, ...), lower case. |
+| `pal_pillars` | list or null | Up to 7 `[label, done, target]` rows, label max 6 characters, e.g. `[["DANISH", 1, 3]]`. |
+
+The three `pal_` fields are null when the phone hasn't posted a state in the last 36 hours.
 
 The Mac agent sends the next few timed events (48 h ahead) on each sync, and the Pi picks the first one still to come each time the feed is read, so `event` moves on even between syncs. All-day events and the Birthdays and Holidays calendars are left out.
 
@@ -94,3 +99,13 @@ A to-do's kind comes from keywords in its title, area and project (see `KIND_WOR
 
 - **done**: the item drops out of both feeds immediately, `left` goes down, `done` and `xp` go up. On its next sync the Mac agent ticks it off in Things (needs `things_auth_token` in `agent.json`), and it is counted once.
 - **skip**: the item moves to the end of today's order until local midnight. Things is not changed. Skipping several keeps them in the order they were skipped.
+
+## Shared Lyra state (phone → Pi → watch)
+
+The phone decides how Lyra looks and what she says; the Pi only stores the latest state and passes it on.
+
+- `POST /api/pal` with `Authorization: Bearer <ONEBOX_CAPTURE_TOKEN>` (or the page cookie). Body:
+  `{"at": <epoch>, "pillars": [{"key": "danish", "label": "DANISH", "done": 1, "target": 3}, ...], "focus": "danish" | null, "pose": "happy", "line": "DANISH 1/3 THIS WEEK"}`.
+  Unknown fields are dropped, text is trimmed (labels and keys to 20, line to 80), counts are clamped to 0–999, at most 12 pillars. The reply is `{"ok": true, pal_line, pal_pose, pal_pillars}`.
+- `GET /api/pal` with the watch token or the capture token returns the stored state, plus `received_at` (Pi time, epoch seconds), or `{}` if none.
+- `watch.json` and `today.json` carry the compact `pal_line`, `pal_pose` and `pal_pillars` above. In `today.json`, `pillars` remains the Pi's own per-kind counts.

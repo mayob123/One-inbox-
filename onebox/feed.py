@@ -68,8 +68,49 @@ def apply_actions(status: dict, actions: dict | None) -> dict:
             "next_id": first.get("id") if first else None}
 
 
-def build(status: dict, xp: int, now: datetime, actions: dict | None = None) -> dict:
-    """status comes from the Mac agent's last report (see agent.things_status)."""
+PAL_MAX_AGE = 36 * 3600
+PAL_LINE_MAX = 24
+PAL_LABEL_MAX = 6
+PAL_PILLARS_MAX = 7
+
+
+def pal_compact(pal: dict | None, now: datetime) -> dict:
+    """The phone's Lyra state, cut down for the watch. All null when there is none or it is over 36 h old."""
+    if not pal or now.timestamp() - float(pal.get("received_at", 0)) > PAL_MAX_AGE:
+        return {"pal_line": None, "pal_pose": None, "pal_pillars": None}
+    rows = [[(p.get("label") or p.get("key") or "")[:PAL_LABEL_MAX], p.get("done", 0), p.get("target", 0)]
+            for p in (pal.get("pillars") or [])[:PAL_PILLARS_MAX]]
+    return {"pal_line": short(pal.get("line"), PAL_LINE_MAX), "pal_pose": pal.get("pose"), "pal_pillars": rows}
+
+
+def clean_pal(body: dict, now: datetime) -> dict:
+    """Keep only the fields the phone is meant to send, with sane types and lengths."""
+    if not isinstance(body, dict):
+        raise ValueError("send a JSON object")
+    def text(v, n):
+        return str(v)[:n] if isinstance(v, (str, int, float)) and str(v).strip() else None
+
+    def count(v):
+        return max(0, min(999, int(v))) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
+
+    pillars = []
+    for p in body.get("pillars") or []:
+        if isinstance(p, dict) and text(p.get("key"), 20):
+            pillars.append({"key": text(p.get("key"), 20), "label": text(p.get("label"), 20) or text(p.get("key"), 20),
+                            "done": count(p.get("done")), "target": count(p.get("target"))})
+    pose = text(body.get("pose"), 16)
+    return {
+        "at": body.get("at") if isinstance(body.get("at"), (int, float)) else None,
+        "received_at": int(now.timestamp()),
+        "pillars": pillars[:12],
+        "focus": text(body.get("focus"), 20),
+        "pose": pose.lower() if pose else None,
+        "line": text(body.get("line"), 80),
+    }
+
+
+def build(status: dict, xp: int, now: datetime, actions: dict | None = None, pal: dict | None = None) -> dict:
+    """status comes from the Mac agent's last report (see agent.things_status); pal from the phone (POST /api/pal)."""
     status = apply_actions(status, actions)
     left = int(status.get("left", 0))
     kind = status.get("next_kind")
@@ -88,6 +129,7 @@ def build(status: dict, xp: int, now: datetime, actions: dict | None = None) -> 
         "event_at": event_at,
         "now_id": status.get("next_id") if status.get("next") else None,
         "event_ts": event_ts,
+        **pal_compact(pal, now),
     }
 
 
@@ -112,7 +154,7 @@ def pillars(status: dict, waiting_mail: dict, ticked: list[dict], now: datetime)
 
 
 def today(status: dict, xp: int, now: datetime, actions: dict | None = None,
-          waiting_mail: dict | None = None) -> dict:
+          waiting_mail: dict | None = None, pal: dict | None = None) -> dict:
     """The watch feed plus every open item in Things Today, for the Pocket Pal phone app."""
     done = set((actions or {}).get("done", []))
     ticked = [r for r in status.get("today") or [] if r.get("id") in done]
@@ -126,4 +168,4 @@ def today(status: dict, xp: int, now: datetime, actions: dict | None = None,
         kind = it.get("kind")
         items.append({"id": it.get("id"), "title": title, "kind": kind if kind in KINDS else "other",
                       "due": it.get("due")})
-    return {**build(status, xp, now), "items": items, "pillars": life}
+    return {**build(status, xp, now, pal=pal), "items": items, "pillars": life}

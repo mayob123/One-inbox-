@@ -118,10 +118,15 @@ def make_handler(cfg: Config, store: Store):
                 if not _same(self.headers.get("X-OneInbox-Token", ""), cfg.watch_token):
                     return self._send(401)
                 status = store.get_meta("things_status", {})
+                pal = store.get_meta("pal")
                 if path == "/feed/watch.json":
-                    return self._json(200, feed.build(status, store.xp(), self._now(), self._todo_state()))
+                    return self._json(200, feed.build(status, store.xp(), self._now(), self._todo_state(), pal))
                 waiting = Counter(i.get("kind") for i in store.items() if i["status"] == "decide" and not i["decision"])
-                return self._json(200, feed.today(status, store.xp(), self._now(), self._todo_state(), waiting))
+                return self._json(200, feed.today(status, store.xp(), self._now(), self._todo_state(), waiting, pal))
+            if path == "/api/pal":
+                if not self._todo_ok():
+                    return self._send(401)
+                return self._json(200, store.get_meta("pal") or {})
             if path == "/":
                 if not self._ui_ok():
                     return self._send(200, (WEB_DIR / "login.html").read_bytes(), "text/html; charset=utf-8")
@@ -192,6 +197,12 @@ def make_handler(cfg: Config, store: Store):
                     store.todo_action(uuid, m.group(1), self._now().date().isoformat())
                     status = store.get_meta("things_status", {})
                     return self._json(200, {"ok": True, **feed.build(status, store.xp(), self._now(), self._todo_state())})
+                if path == "/api/pal":
+                    if not self._capture_ok():
+                        return self._send(401)
+                    pal = feed.clean_pal(self._body(), self._now())
+                    store.set_meta("pal", pal)
+                    return self._json(200, {"ok": True, **feed.pal_compact(pal, self._now())})
                 if path == "/api/todo/ack":
                     if not self._agent_ok():
                         return self._send(401)

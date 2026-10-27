@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from onebox.feed import build, mood, next_event, short, today
+from onebox.feed import build, clean_pal, mood, next_event, pal_compact, short, today
 
 NOON = datetime(2026, 10, 26, 12, 0)
 LATE = datetime(2026, 10, 26, 22, 30)
@@ -27,7 +27,8 @@ class FeedTests(unittest.TestCase):
         self.assertEqual(f, {"v": 1, "at": "2026-10-26T07:30:00+01:00", "left": 3, "done": 2, "xp": 148,
                              "next": "A-kasse hours", "kind": "admin", "bill": "Thu", "mood": "hungry",
                              "event": None, "event_at": None,
-                             "now_id": None, "event_ts": None})
+                             "now_id": None, "event_ts": None,
+                             "pal_line": None, "pal_pose": None, "pal_pillars": None})
 
     def test_empty_status_is_valid(self):
         f = build({}, 0, NOON)
@@ -88,6 +89,26 @@ class FeedTests(unittest.TestCase):
                                        "waiting_mail": 2})
         self.assertEqual(p["msc"], {"done_week": 0, "open": 0, "last_done": None, "next_due": None, "waiting_mail": 0})
         self.assertEqual(p["job"]["waiting_mail"], 1)
+
+    def test_pal_state(self):
+        now = datetime(2026, 10, 27, 7, 0, tzinfo=timezone.utc)
+        pal = clean_pal({"at": 1793000000, "pose": "Happy", "focus": "danish", "line": "danish 1/3 this week, keep going",
+                         "pillars": [{"key": "danish", "label": "DANISH", "done": 1, "target": 3},
+                                     {"key": "msc", "label": "MSC PREP", "done": "x", "target": 2.0},
+                                     {"label": "no key"}, "junk"] + [{"key": f"k{i}", "done": 1, "target": 1} for i in range(8)],
+                         "extra": "dropped"}, now)
+        self.assertNotIn("extra", pal)
+        self.assertEqual(pal["pillars"][1], {"key": "msc", "label": "MSC PREP", "done": 0, "target": 2})
+        c = pal_compact(pal, now)
+        self.assertEqual(c["pal_pose"], "happy")
+        self.assertEqual(len(c["pal_line"]), 24)
+        self.assertEqual(c["pal_pillars"][:2], [["DANISH", 1, 3], ["MSC PR", 0, 2]])
+        self.assertEqual(len(c["pal_pillars"]), 7)
+        self.assertEqual(pal_compact(pal, now + timedelta(hours=37)), {"pal_line": None, "pal_pose": None, "pal_pillars": None})
+        self.assertEqual(build({}, 0, now, pal=pal)["pal_pose"], "happy")
+        self.assertEqual(today({}, 0, now, pal=pal)["pal_pillars"][0], ["DANISH", 1, 3])
+        with self.assertRaises(ValueError):
+            clean_pal(["not", "an", "object"], now)
 
 
 if __name__ == "__main__":
