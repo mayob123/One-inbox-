@@ -91,7 +91,7 @@ The watch keeps using `/feed/watch.json`, which stays under 1 KB for the Garmin'
 - `last_done`: date of the most recent completion in the last 60 days, or null.
 - `next_due`: earliest deadline among the open to-dos, or null.
 
-A to-do's kind comes from its Things tags first: one tag per Pocket Pal pillar (Danish, MSc, Job hunt, Kids, Home admin, Friends, Body; see `PILLAR_TAGS` and `TAG_KINDS` in `agent.py`), on the to-do or its project. Without one, keywords in its title, area and project guess it (`KIND_WORDS`). With `"auto_tag": true` in agent.json the agent writes each guess back to Things as the pillar's tag, once per to-do (remembered in ~/.config/onebox/tagged.json), so a wrong guess is fixed by changing the tag in Things.
+A to-do's kind comes from its Things tags first: one tag per Pocket Pal pillar (Danish, MSc, Job hunt, Family (the old tag Kids still counts), Home admin, Friends, Body; see `PILLAR_TAGS` and `TAG_KINDS` in `agent.py`), on the to-do or its project. Without one, keywords in its title, area and project guess it (`KIND_WORDS`). With `"auto_tag": true` in agent.json the agent writes each guess back to Things as the pillar's tag, once per to-do (remembered in ~/.config/onebox/tagged.json), so a wrong guess is fixed by changing the tag in Things.
 
 ## Done and skip from the watch or phone
 
