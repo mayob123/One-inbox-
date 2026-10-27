@@ -11,7 +11,7 @@ from onebox.server import Config, make_handler
 from onebox.store import Store
 
 ENV = {"ONEBOX_UI_KEY": "u" * 20, "ONEBOX_AGENT_TOKEN": "a" * 20, "ONEBOX_WATCH_TOKEN": "w" * 20,
-       "ONEBOX_DB": ":memory:"}
+       "ONEBOX_CAPTURE_TOKEN": "c" * 20, "ONEBOX_DB": ":memory:"}
 ITEM = {"id": "0123456789abcdef", "status": "decide", "title": "Your latest bill is here", "task": "Check and pay: Vodafone",
         "area": "Admin & bills", "kind": "bill", "source": "mac", "sender": "Vodafone",
         "received": "2026-10-22T13:18:12+00:00", "why": "No reply found.", "lang": "en", "evidence": []}
@@ -132,6 +132,93 @@ class ServerTests(unittest.TestCase):
         self.assertEqual((f["v"], f["left"], f["done"], f["xp"], f["kind"]), (1, 2, 1, 3, "danish"))
         self.assertLessEqual(len(f["next"]), 20)
         self.assertLess(len(raw), 1024)
+
+    def test_today_feed_lists_every_item(self):
+        self.assertEqual(self.web.req(self.base, "GET", "/feed/today.json")[0], 401)
+        items = [{"title": f"Item {i}", "kind": "admin", "due": None} for i in range(12)]
+        self.ingest(things={"left": 12, "next": "Item 0", "next_kind": "admin", "today": items,
+                            "at": "2026-10-26T07:30:00+01:00"})
+        code, raw = self.web.req(self.base, "GET", "/feed/today.json", headers={"X-OneInbox-Token": "w" * 20})
+        self.assertEqual(code, 200)
+        self.assertEqual([i["title"] for i in json.loads(raw)["items"]], [f"Item {i}" for i in range(12)])
+        _, watch = self.web.req(self.base, "GET", "/feed/watch.json", headers={"X-OneInbox-Token": "w" * 20})
+        self.assertNotIn("items", json.loads(watch))
+
+    def outbox(self):
+        return json.loads(self.web.req(self.base, "GET", "/api/outbox", headers=self.agent)[1])["items"]
+
+    def test_auto_items_are_queued_once_and_can_be_unticked(self):
+        auto = dict(ITEM, id="fedcba9876543210", title="Ny besked", task="Read in Aula: Ny besked", auto="things")
+        self.web.req(self.base, "POST", "/api/ingest", {"items": [auto]}, self.agent)
+        self.assertEqual([i["id"] for i in self.outbox()], [auto["id"]])
+        self.store.decide(auto["id"], None)  # Ben unticks it on the page
+        self.web.req(self.base, "POST", "/api/ingest", {"items": [auto]}, self.agent)
+        self.assertEqual(self.outbox(), [])
+
+    def test_quiet_sender_is_not_auto_added(self):
+        first = dict(ITEM, id="1111111111111111", from_addr="noreply@aula.dk", auto="things")
+        self.web.req(self.base, "POST", "/api/ingest", {"items": [first]}, self.agent)
+        self.store.decide(first["id"], "none")  # "No action needed" remembers the sender
+        later = dict(first, id="2222222222222222")
+        self.web.req(self.base, "POST", "/api/ingest", {"items": [later]}, self.agent)
+        self.assertEqual(self.outbox(), [])
+
+    def test_capture_needs_ui_cookie_or_capture_token(self):
+        self.assertEqual(self.web.req(self.base, "POST", "/api/capture", {"text": "Buy milk"})[0], 401)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/capture", {"text": "Buy milk"},
+                                      {"Authorization": "Bearer " + "w" * 20})[0], 401)
+        code, raw = self.web.req(self.base, "POST", "/api/capture", {"text": "Ring the tandlæge"},
+                                 {"Authorization": "Bearer " + "c" * 20})
+        self.assertEqual(code, 200)
+        self.web.req(self.base, "POST", "/login", form={"key": "u" * 20})
+        self.assertEqual(self.web.req(self.base, "POST", "/api/capture", {"text": "Buy milk"})[0], 200)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/capture", {"text": "  "})[0], 400)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/capture", {"text": "x" * 501})[0], 400)
+        out = {i["task"]: i for i in self.outbox()}
+        self.assertEqual(set(out), {"Ring the tandlæge", "Buy milk"})
+        self.assertEqual(out["Ring the tandlæge"]["area"], "Admin & bills")
+
+    def test_capture_token_is_optional(self):
+        Config({k: v for k, v in ENV.items() if k != "ONEBOX_CAPTURE_TOKEN"})
+        with self.assertRaises(SystemExit):
+            Config(dict(ENV, ONEBOX_CAPTURE_TOKEN="short"))
+
+    def test_todo_done_and_skip(self):
+        W = {"X-OneInbox-Token": "w" * 20}
+        rows = [{"id": "uuidA", "title": "Danish homework", "kind": "danish", "due": None},
+                {"id": "uuidB", "title": "Pay phone bill", "kind": "bill", "due": None},
+                {"id": "uuidC", "title": "Ring dentist", "kind": "admin", "due": None}]
+        self.ingest(things={"left": 3, "done_today": 0, "next": "Danish homework", "next_kind": "danish",
+                            "next_id": "uuidA", "today": rows, "completed_ids": []})
+        self.assertEqual(self.web.req(self.base, "POST", "/api/todo/done", {"id": "uuidA"})[0], 401)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/todo/done", {"id": "nope"}, W)[0], 404)
+        code, raw = self.web.req(self.base, "POST", "/api/todo/done", {"id": "uuidA"}, W)
+        self.assertEqual(code, 200)
+        f = json.loads(raw)
+        self.assertEqual((f["now_id"], f["left"], f["done"], f["xp"]), ("uuidB", 2, 1, 1))
+        # The phone skips B with its capture token.
+        self.web.req(self.base, "POST", "/api/todo/skip", {"id": "uuidB"}, {"Authorization": "Bearer " + "c" * 20})
+        f = json.loads(self.web.req(self.base, "GET", "/feed/watch.json", headers=W)[1])
+        self.assertEqual((f["next"], f["now_id"]), ("Ring dentist", "uuidC"))
+        items = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers=W)[1])["items"]
+        self.assertEqual([i["id"] for i in items], ["uuidC", "uuidB"])
+        # The Mac completes A in Things once, then Things reports it done: XP stays 1.
+        self.assertEqual(json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])["ids"], ["uuidA"])
+        self.web.req(self.base, "POST", "/api/todo/ack", {"ids": ["uuidA"]}, self.agent)
+        self.assertEqual(json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])["ids"], [])
+        self.ingest(things={"left": 2, "done_today": 1, "next": "Pay phone bill", "next_kind": "bill",
+                            "next_id": "uuidB", "today": rows[1:], "completed_ids": ["uuidA"]})
+        f = json.loads(self.web.req(self.base, "GET", "/feed/watch.json", headers=W)[1])
+        self.assertEqual((f["now_id"], f["left"], f["done"], f["xp"]), ("uuidC", 2, 1, 1))
+
+    def test_today_feed_has_pillars_with_waiting_mail(self):
+        self.ingest(things={"left": 0, "pillars": {"bill": {"done_week": 1, "open": 2}}})
+        code, raw = self.web.req(self.base, "GET", "/feed/today.json", headers={"X-OneInbox-Token": "w" * 20})
+        p = json.loads(raw)["pillars"]
+        self.assertEqual((p["bill"]["waiting_mail"], p["bill"]["open"], p["danish"]["waiting_mail"]), (1, 2, 0))
+        self.store.decide(ITEM["id"], "later")
+        p = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers={"X-OneInbox-Token": "w" * 20})[1])["pillars"]
+        self.assertEqual(p["bill"]["waiting_mail"], 0)
 
 
 if __name__ == "__main__":

@@ -59,6 +59,30 @@ def make_things(path):
     con.close()
 
 
+def make_calendar(path):
+    def apple(dt):
+        return (dt - agent.APPLE_EPOCH).total_seconds()
+    con = sqlite3.connect(path)
+    con.executescript("""
+      CREATE TABLE Calendar (ROWID INTEGER PRIMARY KEY, title TEXT);
+      CREATE TABLE CalendarItem (ROWID INTEGER PRIMARY KEY, summary TEXT, all_day INTEGER, calendar_id INTEGER);
+      CREATE TABLE OccurrenceCache (day REAL, event_id INTEGER, calendar_id INTEGER, occurrence_date REAL,
+        occurrence_start_date REAL, occurrence_end_date REAL);
+      INSERT INTO Calendar VALUES (1, 'Home'), (2, 'Birthdays');
+      INSERT INTO CalendarItem VALUES (1, 'Dentist', 0, 1), (2, 'Tom''s birthday', 0, 2), (3, 'Holiday', 1, 1),
+        (4, 'Lecture', 0, 1), (5, 'Gone', 0, 1);
+    """)
+    con.executemany("INSERT INTO OccurrenceCache VALUES (0, ?, 1, ?, ?, NULL)", [
+        (1, apple(NOW + timedelta(hours=3)), None),
+        (2, apple(NOW + timedelta(hours=1)), None),
+        (3, apple(NOW + timedelta(hours=1)), None),
+        (4, apple(NOW + timedelta(hours=20)), apple(NOW + timedelta(hours=2))),
+        (5, apple(NOW - timedelta(hours=1)), None),
+    ])
+    con.commit()
+    con.close()
+
+
 class AgentTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -89,6 +113,9 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(s["done_today"], 1)
         self.assertEqual(s["completed_ids"], ["t5"])
         self.assertEqual(s["bill"], (NOW.date() + timedelta(days=3)).strftime("%a"))
+        self.assertEqual([t["title"] for t in s["today"]][0], "Danish homework, chapter 4")
+        self.assertEqual(len(s["today"]), 2)
+        self.assertEqual(s["today"][0]["kind"], "danish")
 
     def test_dry_run_end_to_end(self):
         report = agent.run_once({"mail_db": self.mail, "things_db": self.things, "days": 21,
@@ -96,12 +123,44 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(report["mail"]["done"], 1)
         self.assertEqual(report["things"]["left"], 2)
 
+    def test_next_events(self):
+        cal = os.path.join(self.dir.name, "Calendar.sqlitedb")
+        make_calendar(cal)
+        events = agent.next_events(cal, NOW)
+        self.assertEqual([e["title"] for e in events], ["Lecture", "Dentist"])
+        self.assertEqual(datetime.fromisoformat(events[1]["start"]), (NOW + timedelta(hours=3)).replace(second=0, microsecond=0))
+        self.assertEqual(agent.read_calendar({"calendar_db": self.mail}, NOW)[0], [])  # wrong schema: no crash
+
+    def test_things_pillars(self):
+        p = agent.things_pillars(self.things, NOW)
+        # make_things: t1 Danish (open, Today), t2 bill (open, due +3), t3 Someday (left out),
+        # t4 open with past deadline, t5 done today, t6 done 8 days ago.
+        self.assertEqual(p["danish"]["open"], 1)
+        self.assertEqual(p["bill"]["next_due"], (NOW.date() + timedelta(days=3)).isoformat())
+        other = p["other"]
+        self.assertEqual((other["open"], other["done_week"]), (1, 1))
+        self.assertEqual(other["last_done"], NOW.date().isoformat())
+        self.assertEqual(sum(e["open"] for e in p.values()), 3)
+
+    def test_things_done_url(self):
+        url = agent.things_done_url("ABC123", "tok&en")
+        q = urllib.parse.parse_qs(url.split("?", 1)[1])
+        self.assertTrue(url.startswith("things:///update?"))
+        self.assertEqual((q["id"], q["completed"], q["auth-token"]), (["ABC123"], ["true"], ["tok&en"]))
+
     def test_things_url_is_valid_json(self):
         url = agent.things_add_url([{"task": "Pay & check", "title": "Bill", "sender": "V", "received": "2026-10-22T00:00:00",
                                      "why": "", "area": "Admin"}])
         self.assertTrue(url.startswith("things:///json?data="))
         data = json.loads(urllib.parse.unquote(url.split("=", 1)[1]))
         self.assertEqual(data[0]["attributes"]["title"], "Pay & check")
+        self.assertNotIn("when", data[0]["attributes"])
+
+    def test_auto_items_go_to_today(self):
+        url = agent.things_add_url([{"task": "Read in Aula: Ny besked", "title": "Ny besked", "sender": "Aula",
+                                     "received": "2026-10-22T00:00:00", "auto": "things"}])
+        data = json.loads(urllib.parse.unquote(url.split("=", 1)[1]))
+        self.assertEqual(data[0]["attributes"]["when"], "today")
 
 
 if __name__ == "__main__":

@@ -1,11 +1,12 @@
 """The small JSON feed the Garmin buddy watch face reads.
 
 Contract: docs/watch-feed.md. Keep it additive: never rename or remove a field.
+The phone also gets the whole Today list (today()); the watch feed stays small for the Garmin's memory.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 FEED_VERSION = 1
 NEXT_MAX = 20
@@ -32,10 +33,47 @@ def mood(left: int, overdue: int, friends_overdue: int, now: datetime) -> str:
     return "normal"
 
 
-def build(status: dict, xp: int, now: datetime) -> dict:
+def next_event(events: list[dict], now: datetime) -> tuple[str | None, str | None, int | None]:
+    """The first event that hasn't started yet, within 24 h, with its start as epoch seconds:
+    ("Lecture", "14:00", 1793019600) or ("Dentist", "Tue 09:00", ...)."""
+    now = now if now.tzinfo else now.astimezone()
+    for e in events or []:
+        try:
+            start = datetime.fromisoformat(e["start"]).astimezone(now.tzinfo)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if now <= start < now + timedelta(hours=24):
+            at = start.strftime("%H:%M") if start.date() == now.date() else start.strftime("%a %H:%M")
+            return short(e.get("title")), at, int(start.timestamp())
+    return None, None, None
+
+
+def apply_actions(status: dict, actions: dict | None) -> dict:
+    """Drop items ticked on the watch or phone and move skipped ones to the end, before the Mac
+    has caught up. Works on a copy; an old agent without ids or a today list is left as is."""
+    rows = status.get("today")
+    if not actions or not rows:
+        return status
+    done, skip = set(actions.get("done", [])), list(actions.get("skip", []))
+    kept = [r for r in rows if r.get("id") not in done]
+    order = {u: i for i, u in enumerate(skip)}
+    kept.sort(key=lambda r: (r.get("id") in order, order.get(r.get("id"), 0)))  # stable: skips last, oldest skip first
+    gone = len(rows) - len(kept)
+    first = kept[0] if kept else None
+    return {**status, "today": kept,
+            "left": max(0, int(status.get("left", 0)) - gone),
+            "done_today": int(status.get("done_today", 0)) + gone,
+            "next": first["title"] if first else None,
+            "next_kind": first.get("kind") if first else None,
+            "next_id": first.get("id") if first else None}
+
+
+def build(status: dict, xp: int, now: datetime, actions: dict | None = None) -> dict:
     """status comes from the Mac agent's last report (see agent.things_status)."""
+    status = apply_actions(status, actions)
     left = int(status.get("left", 0))
     kind = status.get("next_kind")
+    event, event_at, event_ts = next_event(status.get("events", []), now)
     return {
         "v": FEED_VERSION,
         "at": status.get("at") or now.isoformat(timespec="seconds"),
@@ -46,4 +84,46 @@ def build(status: dict, xp: int, now: datetime) -> dict:
         "kind": kind if kind in KINDS else (None if not status.get("next") else "other"),
         "bill": status.get("bill"),
         "mood": mood(left, int(status.get("overdue", 0)), int(status.get("friends_overdue", 0)), now),
+        "event": event,
+        "event_at": event_at,
+        "now_id": status.get("next_id") if status.get("next") else None,
+        "event_ts": event_ts,
     }
+
+
+TITLE_MAX = 80
+
+
+def pillars(status: dict, waiting_mail: dict, ticked: list[dict], now: datetime) -> dict:
+    """One entry per kind: Things counts from the Mac, mail still waiting on a decision from the Pi,
+    plus anything ticked on the watch or phone that Things hasn't caught up with."""
+    sent = status.get("pillars") or {}
+    out = {}
+    for k in sorted(KINDS):
+        e = dict({"done_week": 0, "open": 0, "last_done": None, "next_due": None}, **sent.get(k, {}))
+        e["waiting_mail"] = int(waiting_mail.get(k, 0))
+        out[k] = e
+    for r in ticked:
+        e = out[r.get("kind") if r.get("kind") in KINDS else "other"]
+        e["done_week"] += 1
+        e["open"] = max(0, e["open"] - 1)
+        e["last_done"] = now.date().isoformat()
+    return out
+
+
+def today(status: dict, xp: int, now: datetime, actions: dict | None = None,
+          waiting_mail: dict | None = None) -> dict:
+    """The watch feed plus every open item in Things Today, for the Pocket Pal phone app."""
+    done = set((actions or {}).get("done", []))
+    ticked = [r for r in status.get("today") or [] if r.get("id") in done]
+    life = pillars(status, waiting_mail or {}, ticked, now)
+    status = apply_actions(status, actions)
+    items = []
+    for it in status.get("today") or []:
+        title = short(it.get("title"), TITLE_MAX)
+        if not title:
+            continue
+        kind = it.get("kind")
+        items.append({"id": it.get("id"), "title": title, "kind": kind if kind in KINDS else "other",
+                      "due": it.get("due")})
+    return {**build(status, xp, now), "items": items, "pillars": life}

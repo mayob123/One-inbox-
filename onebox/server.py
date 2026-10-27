@@ -3,7 +3,7 @@
 Run:  python3 -m onebox.server
 Config comes from environment variables (see docs/setup.md):
   ONEBOX_DB, ONEBOX_HOST, ONEBOX_PORT, ONEBOX_TZ,
-  ONEBOX_UI_KEY, ONEBOX_AGENT_TOKEN, ONEBOX_WATCH_TOKEN
+  ONEBOX_UI_KEY, ONEBOX_AGENT_TOKEN, ONEBOX_WATCH_TOKEN, ONEBOX_CAPTURE_TOKEN (optional)
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import hmac
 import json
 import os
 import re
+from collections import Counter
 from datetime import datetime
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,10 +23,12 @@ from zoneinfo import ZoneInfo
 
 from . import feed
 from .store import Store
+from .triage import capture_item
 
 WEB_DIR = Path(__file__).parent / "web"
 COOKIE = "onebox_key"
 MAX_BODY = 2_000_000
+MAX_CAPTURE = 500
 
 
 class Config:
@@ -37,8 +40,11 @@ class Config:
         self.ui_key = env.get("ONEBOX_UI_KEY", "")
         self.agent_token = env.get("ONEBOX_AGENT_TOKEN", "")
         self.watch_token = env.get("ONEBOX_WATCH_TOKEN", "")
+        self.capture_token = env.get("ONEBOX_CAPTURE_TOKEN", "")  # for the iPhone Shortcut; optional
         missing = [n for n, v in [("ONEBOX_UI_KEY", self.ui_key), ("ONEBOX_AGENT_TOKEN", self.agent_token),
                                   ("ONEBOX_WATCH_TOKEN", self.watch_token)] if len(v) < 16]
+        if self.capture_token and len(self.capture_token) < 16:
+            missing.append("ONEBOX_CAPTURE_TOKEN")
         if missing:
             raise SystemExit(f"Set these to random strings of 16+ characters: {', '.join(missing)}")
 
@@ -88,6 +94,17 @@ def make_handler(cfg: Config, store: Store):
             auth = self.headers.get("Authorization", "")
             return auth.startswith("Bearer ") and _same(auth[7:], cfg.agent_token)
 
+        def _capture_ok(self) -> bool:
+            auth = self.headers.get("Authorization", "")
+            return self._ui_ok() or (auth.startswith("Bearer ") and _same(auth[7:], cfg.capture_token))
+
+        def _todo_ok(self) -> bool:
+            """The watch (feed token), the phone (capture token) or the page (cookie)."""
+            return _same(self.headers.get("X-OneInbox-Token", ""), cfg.watch_token) or self._capture_ok()
+
+        def _todo_state(self) -> dict:
+            return store.todo_state(self._now().date().isoformat())
+
         def _now(self) -> datetime:
             return datetime.now(cfg.tz)
 
@@ -97,11 +114,14 @@ def make_handler(cfg: Config, store: Store):
             path = url.path
             if path == "/healthz":
                 return self._json(200, {"ok": True})
-            if path == "/feed/watch.json":
+            if path in ("/feed/watch.json", "/feed/today.json"):
                 if not _same(self.headers.get("X-OneInbox-Token", ""), cfg.watch_token):
                     return self._send(401)
                 status = store.get_meta("things_status", {})
-                return self._json(200, feed.build(status, store.xp(), self._now()))
+                if path == "/feed/watch.json":
+                    return self._json(200, feed.build(status, store.xp(), self._now(), self._todo_state()))
+                waiting = Counter(i.get("kind") for i in store.items() if i["status"] == "decide" and not i["decision"])
+                return self._json(200, feed.today(status, store.xp(), self._now(), self._todo_state(), waiting))
             if path == "/":
                 if not self._ui_ok():
                     return self._send(200, (WEB_DIR / "login.html").read_bytes(), "text/html; charset=utf-8")
@@ -119,6 +139,10 @@ def make_handler(cfg: Config, store: Store):
                 if not self._agent_ok():
                     return self._send(401)
                 return self._json(200, {"items": store.outbox()})
+            if path == "/api/todo/outbox":
+                if not self._agent_ok():
+                    return self._send(401)
+                return self._json(200, {"ids": store.todo_outbox()})
             return self._send(404)
 
         def do_POST(self):
@@ -143,10 +167,35 @@ def make_handler(cfg: Config, store: Store):
                     if not store.decide(m.group(1), decision):
                         return self._json(409, {"error": "Already sent to Things, or no such item."})
                     return self._json(200, {"ok": True})
+                if path == "/api/capture":
+                    if not self._capture_ok():
+                        return self._send(401)
+                    text = str(self._body().get("text") or "").strip()
+                    if not text or len(text) > MAX_CAPTURE:
+                        return self._json(400, {"error": f"Send 1 to {MAX_CAPTURE} characters of text."})
+                    item = capture_item(text, self._now()).to_dict()
+                    store.upsert_items([item])
+                    return self._json(200, {"ok": True, "id": item["id"], "task": item["task"],
+                                            "message": "Got it. It goes to Things on your next Mac sync."})
                 if path == "/api/quiet/remove":
                     if not self._ui_ok():
                         return self._send(401)
                     return self._json(200, {"ok": store.unquiet(str(self._body().get("sender", "")))})
+                m = re.fullmatch(r"/api/todo/(done|skip)", path)
+                if m:
+                    if not self._todo_ok():
+                        return self._send(401)
+                    uuid = str(self._body().get("id") or "")
+                    rows = store.get_meta("things_status", {}).get("today") or []
+                    if uuid not in {r.get("id") for r in rows}:
+                        return self._json(404, {"error": "Not in today's Things list."})
+                    store.todo_action(uuid, m.group(1), self._now().date().isoformat())
+                    status = store.get_meta("things_status", {})
+                    return self._json(200, {"ok": True, **feed.build(status, store.xp(), self._now(), self._todo_state())})
+                if path == "/api/todo/ack":
+                    if not self._agent_ok():
+                        return self._send(401)
+                    return self._json(200, {"ok": True, "acked": store.ack_todos(self._body().get("ids", []))})
                 if path == "/api/ingest":
                     if not self._agent_ok():
                         return self._send(401)

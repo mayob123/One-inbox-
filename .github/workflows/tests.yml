@@ -2,8 +2,7 @@ name: tests
 on: [push, pull_request]
 jobs:
   test:
-    # 22.04: newer runner images no longer ship Python 3.9, which is what macOS has as /usr/bin/python3.
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04  # Python 3.9 (the Mac's Xcode Python) is not built for newer Ubuntu images
     strategy:
       matrix:
         python: ["3.9", "3.11", "3.13"]

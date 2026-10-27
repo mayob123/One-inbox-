@@ -4,7 +4,9 @@ Each run it:
   1. reads mail headers from Mail's local index (read-only, no bodies),
   2. sorts them (triage.py) and sends the result to the Pi,
   3. reads Things 3 (read-only) for today's count, next item, bills and XP,
-  4. adds anything Ben marked "Add" on his phone to Things, via the Things URL scheme.
+     and Calendar (read-only) for the next few events,
+  4. adds anything Ben marked "Add" on his phone to Things, via the Things URL scheme,
+  5. adds study sessions and deadlines from his calendar feeds to Things (studycal.py).
 
 Needs Full Disk Access for the Python that runs it (System Settings > Privacy & Security).
 Config: ~/.config/onebox/agent.json (see docs/setup.md).
@@ -18,11 +20,13 @@ import os
 import sqlite3
 import subprocess
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
+from . import studycal
 from .triage import Message, summary, triage
 
 HOME = Path.home()
@@ -30,7 +34,13 @@ MAIL_GLOB = str(HOME / "Library/Mail/V*/MailData/Envelope Index")
 THINGS_GLOB = str(HOME / "Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-*/"
                   "Things Database.thingsdatabase/main.sqlite")
 MESSAGES_DB = str(HOME / "Library/Messages/chat.db")
+CALENDAR_DBS = (  # newer macOS first
+    str(HOME / "Library/Group Containers/group.com.apple.calendar/Calendar.sqlitedb"),
+    str(HOME / "Library/Calendars/Calendar.sqlitedb"),
+)
+CALENDAR_SKIP = ("Birthdays", "Fødselsdage", "Holidays in Denmark", "Helligdage i Danmark", "Siri Suggestions")
 CONFIG_PATH = Path(os.environ.get("ONEBOX_AGENT_CONFIG", HOME / ".config/onebox/agent.json"))
+CALENDAR_SEEN = CONFIG_PATH.parent / "calendar-seen.json"
 
 SKIP_MAILBOXES = ("junk", "spam", "trash", "deleted", "drafts", "blocked", "outbox")
 APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
@@ -115,6 +125,9 @@ def kind_of(*texts: str) -> str:
     return "other"
 
 
+TODAY_MAX = 40  # enough for any real Today list, and keeps the phone feed small
+
+
 def things_status(db_path: str, now: datetime) -> dict:
     today = now.date()
     t_today = things_date(today)
@@ -160,6 +173,9 @@ def things_status(db_path: str, now: datetime) -> dict:
             bill = d.strftime("%a") if 0 <= (d - today).days < 7 else d.strftime("%-d %b")
             break
     first = open_today[0] if open_today else None
+    today_list = [{"id": t["uuid"], "title": t["title"], "kind": kind_of(t["title"], t["area"], t["project"]),
+                   "due": from_things_date(t["deadline"]).isoformat() if t["deadline"] else None}
+                  for t in open_today[:TODAY_MAX]]
     return {
         "at": now.isoformat(timespec="seconds"),
         "left": len(open_today),
@@ -167,9 +183,101 @@ def things_status(db_path: str, now: datetime) -> dict:
         "completed_ids": completed_ids,
         "overdue": overdue,
         "next": first["title"] if first else None,
+        "next_id": first["uuid"] if first else None,
         "next_kind": kind_of(first["title"], first["area"], first["project"]) if first else None,
         "bill": bill,
+        "today": today_list,
     }
+
+
+# --- Pillars: how each area of life is going, for the phone ---------------
+
+PILLAR_DAYS = 60  # how far back last_done looks
+
+
+def things_pillars(db_path: str, now: datetime) -> dict:
+    """Per kind: done since Monday, open (not Someday), last done date and next deadline."""
+    today = now.date()
+    monday = datetime.combine(today - timedelta(days=today.weekday()), time.min, tzinfo=now.tzinfo).timestamp()
+    since = (now - timedelta(days=PILLAR_DAYS)).timestamp()
+    join = """FROM TMTask t
+              LEFT JOIN TMArea a ON a.uuid = t.area
+              LEFT JOIN TMTask p ON p.uuid = t.project
+              LEFT JOIN TMArea pa ON pa.uuid = p.area"""
+    cols = "t.title, COALESCE(a.title, pa.title, '') AS area, COALESCE(p.title, '') AS project"
+    con = ro_connect(db_path)
+    try:
+        open_rows = con.execute(f"SELECT {cols}, t.deadline {join} "
+                                "WHERE t.type = 0 AND t.status = 0 AND t.trashed = 0 AND t.start != 2").fetchall()
+        done_rows = con.execute(f"SELECT {cols}, t.stopDate {join} "
+                                "WHERE t.type = 0 AND t.status = 3 AND t.trashed = 0 AND t.stopDate >= ?",
+                                (since,)).fetchall()
+    finally:
+        con.close()
+    out: dict = {}
+
+    def entry(r) -> dict:
+        k = kind_of(r["title"], r["area"], r["project"])
+        return out.setdefault(k, {"done_week": 0, "open": 0, "last_done": None, "next_due": None})
+
+    for r in open_rows:
+        e = entry(r)
+        e["open"] += 1
+        if r["deadline"]:
+            due = from_things_date(r["deadline"]).isoformat()
+            e["next_due"] = min(e["next_due"] or due, due)
+    for r in done_rows:
+        e = entry(r)
+        e["done_week"] += r["stopDate"] >= monday
+        day = datetime.fromtimestamp(r["stopDate"], now.tzinfo).date().isoformat()
+        e["last_done"] = max(e["last_done"] or day, day)
+    return out
+
+
+# --- Calendar ------------------------------------------------------------
+
+def next_events(db_path: str, now: datetime, hours: int = 48, skip: tuple = CALENDAR_SKIP,
+                limit: int = 5) -> list[dict]:
+    """Timed events starting in the next `hours`, soonest first. Repeating events come from
+    Calendar's own occurrence cache. All-day events and skipped calendars are left out."""
+    start = (now - APPLE_EPOCH).total_seconds()
+    con = ro_connect(db_path)
+    try:
+        rows = con.execute(
+            """SELECT ci.summary AS title, COALESCE(oc.occurrence_start_date, oc.occurrence_date) AS start,
+                      COALESCE(c.title, '') AS calendar
+               FROM OccurrenceCache oc
+               JOIN CalendarItem ci ON ci.ROWID = oc.event_id
+               LEFT JOIN Calendar c ON c.ROWID = ci.calendar_id
+               WHERE COALESCE(ci.all_day, 0) = 0
+                 AND COALESCE(oc.occurrence_start_date, oc.occurrence_date) >= ?
+                 AND COALESCE(oc.occurrence_start_date, oc.occurrence_date) < ?
+               ORDER BY 2""",
+            (start, start + hours * 3600),
+        ).fetchall()
+    finally:
+        con.close()
+    out, seen = [], set()
+    for r in rows:
+        if not r["title"] or r["calendar"] in skip or (r["title"], r["start"]) in seen:
+            continue
+        seen.add((r["title"], r["start"]))
+        when = (APPLE_EPOCH + timedelta(seconds=r["start"])).astimezone(now.tzinfo)
+        out.append({"title": r["title"], "start": when.isoformat(timespec="minutes")})
+        if len(out) == limit:
+            break
+    return out
+
+
+def read_calendar(cfg: dict, now: datetime) -> tuple[list[dict], str]:
+    path = cfg.get("calendar_db") or next((p for p in CALENDAR_DBS if os.path.exists(p)), None)
+    if not path:
+        return [], "Calendar database not found. Is Full Disk Access on?"
+    try:
+        events = next_events(path, now, skip=tuple(cfg.get("calendar_skip", CALENDAR_SKIP)))
+    except sqlite3.Error as e:  # Apple changes this schema now and then; never let it stop a sync
+        return [], f"Could not read Calendar: {e}"
+    return events, f"{len(events)} events in the next 48 h"
 
 
 # --- Friends (Messages) ---------------------------------------------------
@@ -214,15 +322,39 @@ def call(server: str, token: str, method: str, path: str, body: dict | None = No
 
 
 def things_add_url(items: list[dict]) -> str:
-    todos = [{
-        "type": "to-do",
-        "attributes": {
+    todos = []
+    for it in items:
+        attrs = {
             "title": it["task"],
             "notes": f"{it['title']}\nFrom {it.get('sender', '')}, {it['received'][:10]}\n{it.get('why', '')}\n"
                      f"Area: {it.get('area', '')}\n(added by One Inbox)",
-        },
-    } for it in items]
+        }
+        if it.get("auto"):  # e-Boks, Aula and quick captures go to Today, so the watch shows them
+            attrs["when"] = "today"
+        todos.append({"type": "to-do", "attributes": attrs})
     return "things:///json?data=" + urllib.parse.quote(json.dumps(todos))
+
+
+def things_done_url(uuid: str, auth_token: str) -> str:
+    """Things needs its own auth token (Settings > General > Enable Things URLs) to change a to-do."""
+    return "things:///update?" + urllib.parse.urlencode({"id": uuid, "completed": "true", "auth-token": auth_token})
+
+
+def complete_in_things(cfg: dict, dry_run: bool = False) -> int | str:
+    """Tick off in Things what Ben marked done on the watch or phone."""
+    try:
+        ids = call(cfg["server"], cfg["token"], "GET", "/api/todo/outbox").get("ids", [])
+    except urllib.error.HTTPError as e:  # a Pi that hasn't been updated yet
+        return f"Pi has no /api/todo/outbox yet ({e.code}). Update it with install-pi.sh."
+    if not ids:
+        return 0
+    token = cfg.get("things_auth_token", "")
+    if not token:
+        return f"{len(ids)} waiting: add things_auth_token to agent.json (see docs/setup.md)"
+    for uuid in ids:
+        subprocess.run(["open", "-g", things_done_url(uuid, token)], check=True)
+    call(cfg["server"], cfg["token"], "POST", "/api/todo/ack", {"ids": ids})
+    return len(ids)
 
 
 def load_config() -> dict:
@@ -240,19 +372,24 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
     items = []
     if mail_db:
         msgs = read_mail(mail_db, cfg["days"], cfg.get("account_labels"), now)
-        items = [i.to_dict() for i in triage(msgs)]
-        report["mail"] = summary(triage(msgs))
+        triaged = triage(msgs, now)
+        items = [i.to_dict() for i in triaged]
+        report["mail"] = summary(triaged)
     else:
         report["mail"] = "Mail index not found. Is Full Disk Access on?"
     payload: dict = {"items": items}
     things_db = cfg.get("things_db") or newest(THINGS_GLOB)
     if things_db:
         status = things_status(things_db, now)
+        status["pillars"] = things_pillars(things_db, now)
         status["friends_overdue"] = friends_overdue(cfg.get("messages_db", MESSAGES_DB), cfg.get("friends", []), now)
+        status["events"], report["calendar"] = read_calendar(cfg, now)
         payload["things"] = status
         report["things"] = {k: v for k, v in status.items() if k != "completed_ids"}
     if dry_run:
         report["would_send"] = len(items)
+        if cfg.get("calendars") or cfg.get("deadlines"):
+            report["calendar"] = calendar_preview(cfg, now)
         return report
     call(cfg["server"], cfg["token"], "POST", "/api/ingest", payload)
     outbox = call(cfg["server"], cfg["token"], "GET", "/api/outbox").get("items", [])
@@ -260,7 +397,33 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
         subprocess.run(["open", "-g", things_add_url(outbox)], check=True)
         call(cfg["server"], cfg["token"], "POST", "/api/outbox/ack", {"ids": [i["id"] for i in outbox]})
     report["added_to_things"] = len(outbox)
+    report["completed_in_things"] = complete_in_things(cfg)
+    report["calendar"] = sync_calendars(cfg, now)
     return report
+
+
+def calendar_preview(cfg: dict, now: datetime) -> dict:
+    events, errors = studycal.collect(cfg, now)
+    seen = studycal.load_seen(Path(cfg.get("calendar_seen", CALENDAR_SEEN)))
+    new = studycal.due_now(events, seen, now)
+    return {"events": len(events), "would_add": [t["attributes"]["title"] for t in studycal.things_json(new, now.date())],
+            "errors": errors}
+
+
+def sync_calendars(cfg: dict, now: datetime) -> dict:
+    if not cfg.get("calendars") and not cfg.get("deadlines"):
+        return {}
+    seen_path = Path(cfg.get("calendar_seen", CALENDAR_SEEN))
+    events, errors = studycal.collect(cfg, now)
+    seen = studycal.load_seen(seen_path)
+    new = studycal.due_now(events, seen, now)
+    todos = studycal.things_json(new, now.date())
+    if todos:
+        subprocess.run(["open", "-g", "things:///json?data=" + urllib.parse.quote(json.dumps(todos))], check=True)
+        for ev in new:
+            seen[ev.key()] = now.date().isoformat()
+    studycal.save_seen(seen_path, seen, now.date())
+    return {"added": len(todos), "errors": errors}
 
 
 def main(argv: list[str] = sys.argv[1:]) -> None:
