@@ -166,6 +166,8 @@ def today(status: dict, xp: int, now: datetime, actions: dict | None = None,
         if not title:
             continue
         kind = it.get("kind")
-        items.append({"id": it.get("id"), "title": title, "kind": kind if kind in KINDS else "other",
-                      "due": it.get("due")})
+        entry = {"id": it.get("id"), "title": title, "kind": kind if kind in KINDS else "other", "due": it.get("due")}
+        if it.get("notes"):
+            entry["notes"] = it["notes"]
+        items.append(entry)
     return {**build(status, xp, now, pal=pal), "items": items, "pillars": life}

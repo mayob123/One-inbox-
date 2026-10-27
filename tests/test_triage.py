@@ -115,6 +115,17 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class HomeworkTests(unittest.TestCase):
+    def test_danish_homework_goes_to_things_for_today(self):
+        items = by_title(triage([msg("Re: manglende lektier", "adil@welcometodanmark.dk", "Adil", days=0),
+                                 msg("Lektier til uge 40", "adil@welcometodanmark.dk", "Adil", days=-20)], T0))
+        new = items["Re: manglende lektier"]
+        self.assertEqual((new.status, new.auto, new.kind), ("decide", "things", "danish"))
+        self.assertEqual(new.task, "Danish homework: Manglende lektier")
+        self.assertEqual(items["Lektier til uge 40"].auto, "")  # too old to add by itself
+        self.assertTrue(new.ref)
+
+
 class FilterTests(unittest.TestCase):
     def status(self, subject, addr, name=""):
         return triage([msg(subject, addr, name)])[0].status

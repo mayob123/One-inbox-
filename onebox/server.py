@@ -132,6 +132,14 @@ def make_handler(cfg: Config, store: Store):
                 if not self._todo_ok():
                     return self._send(401)
                 return self._json(200, store.get_meta("pal") or {})
+            if path == "/api/waiting":
+                if not self._todo_ok():
+                    return self._send(401)
+                keep = ("id", "title", "task", "kind", "area", "sender", "received", "why", "excerpt", "links",
+                        "attachments", "saved", "mail_link")
+                waiting = [{k: i[k] for k in keep if i.get(k)} for i in store.items()
+                           if i["status"] == "decide" and not i["decision"]]
+                return self._json(200, {"items": waiting})
             if path == "/api/pihole":
                 if not self._todo_ok():
                     return self._send(401)
@@ -175,7 +183,7 @@ def make_handler(cfg: Config, store: Store):
             try:
                 m = re.fullmatch(r"/api/items/([0-9a-f]{16})/decision", path)
                 if m:
-                    if not self._ui_ok():
+                    if not self._capture_ok():  # the page, or Pocket Pal on the phone
                         return self._send(401)
                     decision = self._body().get("decision")
                     if not store.decide(m.group(1), decision):

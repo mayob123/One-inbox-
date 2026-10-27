@@ -222,6 +222,7 @@ class AgentTests(unittest.TestCase):
         due = (NOW.date() + timedelta(days=4)).isoformat()
         self.assertEqual((job["next_due"], job["job_due"], job["leads"], job["applied_week"], job["open"]),
                          (due, due, 2, 1, 2))
+        self.assertEqual([lead["title"] for lead in job["lead_list"]], ["Strong", "Possible"])  # soonest first
         self.assertEqual(datetime.fromisoformat(job["interview_at"]),
                          (NOW + timedelta(hours=5)).replace(second=0, microsecond=0))
         self.assertEqual(agent.read_job_tracker({"job_tracker_db": self.mail}, {}, NOW)[:9], "Could not")
@@ -264,6 +265,40 @@ class AgentTests(unittest.TestCase):
                                      "received": "2026-10-22T00:00:00", "auto": "things"}])
         data = json.loads(urllib.parse.unquote(url.split("=", 1)[1]))
         self.assertEqual(data[0]["attributes"]["when"], "today")
+
+    def test_mail_details_from_emlx(self):
+        raw = (b"Message-ID: <abc123@mail.dk>\r\nFrom: Adil <adil@welcometodanmark.dk>\r\nSubject: Re: manglende lektier\r\n"
+               b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+               b"Hej Ben,\r\nSe afsnit 1: https://www.dr.dk/drtv/gift-1 og quizlet https://quizlet.com/join/xyz.\r\n"
+               b"Unsubscribe: https://example.com/unsubscribe\r\n\r\nDen 14. okt. skrev Ben:\r\n> old https://old.example\r\n")
+        with tempfile.TemporaryDirectory() as d:
+            mail = os.path.join(d, "V10")
+            msgs = os.path.join(mail, "ACC1", "INBOX.mbox", "Data", "Messages")
+            files = os.path.join(mail, "ACC1", "INBOX.mbox", "Data", "Attachments", "7", "2")
+            os.makedirs(msgs)
+            os.makedirs(files)
+            with open(os.path.join(msgs, "7.emlx"), "wb") as fh:
+                fh.write(str(len(raw)).encode() + b"\n" + raw + b"<?xml version=\"1.0\"?><plist/>")
+            with open(os.path.join(files, "slides.pdf"), "wb") as fh:
+                fh.write(b"%PDF")
+            icloud = os.path.join(d, "iCloud")
+            os.makedirs(icloud)
+            item = {"status": "decide", "ref": "ACC1:7", "received": NOW.isoformat(), "auto": "things",
+                    "area": "Danish", "title": "Re: manglende lektier", "task": "Danish homework", "sender": "Adil"}
+            n = agent.add_details([item], os.path.join(mail, "MailData", "Envelope Index"), NOW,
+                                  save_to=agent.Path(icloud))
+            self.assertEqual(n, 1)
+            self.assertEqual(item["links"], ["https://www.dr.dk/drtv/gift-1", "https://quizlet.com/join/xyz"])
+            self.assertNotIn("old", item["excerpt"])
+            self.assertEqual(item["mail_link"], "message:%3Cabc123@mail.dk%3E")
+            self.assertTrue(os.path.exists(os.path.join(icloud, "One Inbox", "Danish", "slides.pdf")))
+            notes = agent.things_notes(item)
+            self.assertTrue(notes.startswith("https://www.dr.dk/drtv/gift-1\nhttps://quizlet.com/join/xyz\n"))
+            self.assertIn("Open the email: message:%3Cabc123@mail.dk%3E", notes)
+
+    def test_things_notes_reach_the_phone(self):
+        self.assertEqual(agent.things_text("<note xml:space=\"preserve\"><p>Quizlet: https://q.com/x</p></note>"),
+                         "Quizlet: https://q.com/x")
 
 
 if __name__ == "__main__":

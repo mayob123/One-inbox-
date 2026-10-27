@@ -226,6 +226,21 @@ class ServerTests(unittest.TestCase):
         p = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers={"X-OneInbox-Token": "w" * 20})[1])["pillars"]
         self.assertEqual(p["bill"]["waiting_mail"], 0)
 
+    def test_phone_lists_and_decides_waiting_mail(self):
+        self.ingest()
+        self.assertEqual(self.web.req(self.base, "GET", "/api/waiting")[0], 401)
+        code, raw = self.web.req(self.base, "GET", "/api/waiting", headers={"Authorization": "Bearer " + "c" * 20})
+        self.assertEqual(code, 200)
+        self.assertEqual([i["id"] for i in json.loads(raw)["items"]], [ITEM["id"]])
+        path = f"/api/items/{ITEM['id']}/decision"
+        self.assertEqual(self.web.req(self.base, "POST", path, {"decision": "add"},
+                                      {"Authorization": "Bearer " + "w" * 20})[0], 401)  # the watch can't decide
+        self.assertEqual(self.web.req(self.base, "POST", path, {"decision": "add"},
+                                      {"Authorization": "Bearer " + "c" * 20})[0], 200)
+        raw = self.web.req(self.base, "GET", "/api/waiting", headers={"Authorization": "Bearer " + "c" * 20})[1]
+        self.assertEqual(json.loads(raw)["items"], [])
+        self.assertEqual([i["id"] for i in self.outbox()], [ITEM["id"]])
+
     def test_pal_round_trip(self):
         W = {"X-OneInbox-Token": "w" * 20}
         body = {"at": 1793000000, "pose": "proud", "focus": None, "line": "ALL PILLARS ON TRACK",

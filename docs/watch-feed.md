@@ -115,3 +115,17 @@ The phone decides how Lyra looks and what she says; the Pi only stores the lates
 `GET /api/pihole` with the watch token or the capture token returns Pi-hole v6's numbers from the same Pi, cached for a minute:
 `{"status": "enabled", "queries": 12000, "blocked": 1500, "percent": 12.5, "clients": 6, "domains_blocked": 180000, "top_blocked": [{"domain", "count"}], "at": <epoch>}`.
 `status` is `enabled`, `disabled`, `locked` (set `PIHOLE_PASSWORD`) or `unreachable`; the numbers are missing unless it's enabled or disabled.
+
+## Waiting emails (Pocket Pal's pillar pages)
+
+`GET /api/waiting` with the watch token or the capture token lists the emails still waiting on a decision:
+`{"items": [{"id", "title", "task", "kind", "area", "sender", "received", "why", "excerpt", "links",
+"attachments", "saved", "mail_link"}]}`. Fields are left out when empty. For recent emails the Mac reads the
+body: `excerpt` is the new part (no quoted history), `links` its web links, `mail_link` a `message:` link
+that opens the email in Mail, and `saved` where a homework email's attachments were copied in iCloud Drive.
+
+The phone decides one with `POST /api/items/<id>/decision` `{"decision": "add" | "none"}` and the capture
+token, as the triage page does.
+
+Items in `/feed/today.json` carry `notes` (the to-do's notes in Things, plain text) when there are any, and
+the `job` pillar carries `lead_list`: up to five good open leads from the job tracker, soonest deadline first.
