@@ -3,7 +3,7 @@
 Three parts, about 20 minutes in total:
 
 1. **The Pi** runs the server: the triage page, the watch feed and the database.
-2. **The Mac** runs the agent every 15 minutes: reads Mail and Things, sends results to the Pi, adds your picks to Things.
+2. **The Mac** runs the agent every 2 minutes: reads Mail and Things, sends results to the Pi, adds your picks to Things.
 3. **Names and access**: Pi-hole gives the Pi a home name, Tailscale makes it reachable when you're out.
 
 Nothing here is open to the internet. Mail and Things are only ever read, never changed, except that the agent adds the to-dos you picked.
@@ -87,7 +87,7 @@ cd ~/one-inbox && python3 -m onebox.agent --dry-run
 
 You should see counts for `decide`, `done`, `scam` and your Things numbers. If it says the Mail index was not found, Full Disk Access is not on yet.
 
-Then run it every 15 minutes:
+Then run it every 2 minutes, so a tick in Things reaches the phone quickly:
 
 ```bash
 sed "s#__REPO__#$HOME/one-inbox#" deploy/com.oneinbox.agent.plist > ~/Library/LaunchAgents/com.oneinbox.agent.plist
@@ -101,7 +101,7 @@ Mail must have your accounts added (mac.com and Gmail already are). Spark can st
 
 Open the `ts.net` address in Safari, enter your UI key once, then Share → Add to Home Screen. It now opens like an app.
 
-Picks you mark **Add to Things** appear in your Things Inbox within 15 minutes (the Mac must be awake).
+Picks you mark **Add to Things** appear in your Things Inbox within 2 minutes (the Mac must be awake).
 
 ## Turn things off
 

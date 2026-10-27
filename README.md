@@ -5,7 +5,7 @@ One place for everything that needs Ben: mail, e-Boks and Aula alerts, bills, pl
 ```
  Mail (mac.com, Gmail) ─┐                       ┌─> iPhone: triage page (Add / Done / Later / Not mine)
  Things 3 ──────────────┼─> Mac agent ─> Pi ────┼─> Garmin: buddy watch face feed
- Messages (friends) ────┘   every 15 min        └─> Things 3: your picks, added by the Mac
+ Messages (friends) ────┘   every 2 min         └─> Things 3: your picks, added by the Mac
 ```
 
 - **Local.** Runs on your Pi and Mac. Reached at home as `inbox.home` (Pi-hole local DNS) and away over Tailscale. Nothing is public.

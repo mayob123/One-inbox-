@@ -10,7 +10,7 @@
     <string>onebox.agent</string>
   </array>
   <key>WorkingDirectory</key><string>__REPO__</string>
-  <key>StartInterval</key><integer>900</integer>
+  <key>StartInterval</key><integer>120</integer>
   <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>/tmp/onebox-agent.log</string>
   <key>StandardErrorPath</key><string>/tmp/onebox-agent.log</string>
