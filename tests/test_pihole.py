@@ -48,11 +48,18 @@ class PiHoleTests(unittest.TestCase):
         self.assertEqual(fake.logins, 1)  # the session is reused
 
     def test_wrong_password_and_no_pihole(self):
-        self.assertEqual(PiHole(password="nope", opener=FakePiHole("app-pass")).summary(now=1)["status"], "locked")
+        locked = PiHole(password="nope", opener=FakePiHole("app-pass")).summary(now=1)
+        self.assertEqual((locked["status"], locked["reason"]), ("locked", "HTTP 401"))
 
         def down(req, timeout):
             raise urllib.error.URLError("refused")
-        self.assertEqual(PiHole(opener=down).summary(now=1), {"status": "unreachable", "at": 1})
+        self.assertEqual(PiHole(opener=down).summary(now=1), {"status": "unreachable", "reason": "URLError", "at": 1})
+
+    def test_reason_carries_pihole_error_key(self):
+        def busy(req, timeout):
+            body = io.BytesIO(json.dumps({"error": {"key": "api_seats_exceeded"}}).encode())
+            raise urllib.error.HTTPError(req.full_url, 429, "too many", {}, body)
+        self.assertEqual(PiHole(opener=busy).summary(now=1)["reason"], "HTTP 429 api_seats_exceeded")
 
 
 if __name__ == "__main__":

@@ -114,4 +114,4 @@ The phone decides how Lyra looks and what she says; the Pi only stores the lates
 
 `GET /api/pihole` with the watch token or the capture token returns Pi-hole v6's numbers from the same Pi, cached for a minute:
 `{"status": "enabled", "queries": 12000, "blocked": 1500, "percent": 12.5, "clients": 6, "domains_blocked": 180000, "top_blocked": [{"domain", "count"}], "at": <epoch>}`.
-`status` is `enabled`, `disabled`, `locked` (set `PIHOLE_PASSWORD`) or `unreachable`; the numbers are missing unless it's enabled or disabled.
+`status` is `enabled`, `disabled`, `locked` (set `PIHOLE_PASSWORD`) or `unreachable`; the numbers are missing unless it's enabled or disabled. A failure also carries `reason` (Pi-hole's HTTP code and error key, e.g. `HTTP 401`), which the server logs once to the journal.

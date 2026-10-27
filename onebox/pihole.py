@@ -5,6 +5,7 @@ from Pi-hole's web page, Settings > Web interface / API; leave it unset if the A
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 import urllib.error
@@ -71,9 +72,21 @@ class PiHole:
                                     for d in top[:5]],
                 }
             except urllib.error.HTTPError as e:
-                out = {"status": "locked" if e.code in (401, 403) else "unreachable"}
-            except (OSError, ValueError):
-                out = {"status": "unreachable"}
+                out = {"status": "locked" if e.code in (401, 403) else "unreachable", "reason": _reason(e)}
+            except (OSError, ValueError) as e:
+                out = {"status": "unreachable", "reason": type(e).__name__}
+            if "reason" in out and out["reason"] != (self._cached[1].get("reason") if self._cached else None):
+                # Once per change, so the journal says why (never the password).
+                print(f"pihole: {out['status']}: {out['reason']}", file=sys.stderr, flush=True)
             out["at"] = int(now)
             self._cached = (now, out)
             return out
+
+
+def _reason(e: urllib.error.HTTPError) -> str:
+    """Pi-hole's own error key ("unauthorized", "api_seats_exceeded"...) with the HTTP code."""
+    try:
+        key = (json.loads(e.read() or b"{}").get("error") or {}).get("key")
+    except (OSError, ValueError, AttributeError):
+        key = None
+    return f"HTTP {e.code}" + (f" {key}" if key else "")
