@@ -142,6 +142,46 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(other["last_done"], NOW.date().isoformat())
         self.assertEqual(sum(e["open"] for e in p.values()), 3)
 
+    def test_things_tags_decide_the_pillar(self):
+        con = sqlite3.connect(self.things)
+        con.executescript("""
+          CREATE TABLE TMTag (uuid TEXT PRIMARY KEY, title TEXT);
+          CREATE TABLE TMTaskTag (tasks TEXT, tags TEXT);
+          INSERT INTO TMTag VALUES ('g1', 'Job hunt'), ('g2', 'Errand');
+          INSERT INTO TMTaskTag VALUES ('t4', 'g1'), ('t4', 'g2'), ('t2', 'g2');
+        """)
+        con.commit()
+        con.close()
+        p = agent.things_pillars(self.things, NOW)
+        self.assertEqual(p["job"]["open"], 1)  # "Late form" is tagged Job hunt
+        self.assertEqual(p["bill"]["open"], 1)  # an unrelated tag leaves the guess alone
+        s = agent.things_status(self.things, NOW)
+        self.assertEqual(s["today"][0]["kind"], "danish")
+        # Untagged to-dos that look like a pillar get its tag; t4 is tagged already.
+        self.assertEqual(sorted(agent.untagged_guesses(self.things)), [("t1", "Danish"), ("t2", "Home admin")])
+
+    def test_kind_of_prefers_tags(self):
+        self.assertEqual(agent.kind_of("Pay rent", tags="Kids"), "school")
+        self.assertEqual(agent.kind_of("Pay rent", tags="Dansk|x"), "danish")
+        self.assertEqual(agent.kind_of("Pay rent", tags=None), "bill")
+        self.assertEqual(agent.kind_of("Apply to Lundbeck", tags="Job search"), "job")
+
+    def test_tagging_writes_each_guess_once(self):
+        tagged = os.path.join(self.dir.name, "tagged.json")
+        cfg = {"auto_tag": True, "things_auth_token": "tok", "tagged": tagged}
+        opened = []
+        real = agent.subprocess.run
+        agent.subprocess.run = lambda args, check: opened.append(args[-1])
+        try:
+            self.assertEqual(agent.tag_in_things(cfg, self.things), 2)
+            self.assertEqual(agent.tag_in_things(cfg, self.things), 0)
+            self.assertEqual(agent.tag_in_things({"things_auth_token": "tok"}, self.things), 0)  # off by default
+        finally:
+            agent.subprocess.run = real
+        self.assertTrue(all(u.startswith("things:///update?") and "add-tags=" in u for u in opened))
+        with open(tagged) as f:
+            self.assertEqual(json.load(f), {"t1": "Danish", "t2": "Home admin"})
+
     def test_things_done_url(self):
         url = agent.things_done_url("ABC123", "tok&en")
         q = urllib.parse.parse_qs(url.split("?", 1)[1])

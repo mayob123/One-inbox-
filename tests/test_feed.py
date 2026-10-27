@@ -83,7 +83,7 @@ class FeedTests(unittest.TestCase):
                                        {"id": "B", "title": "Book Danish lesson", "kind": "danish"}],
                   "pillars": {"danish": {"done_week": 1, "open": 4, "last_done": "2026-10-20", "next_due": "2026-10-28"}}}
         p = today(status, 0, NOON, {"done": ["A"], "skip": []}, {"danish": 2, "job": 1})["pillars"]
-        self.assertEqual(set(p), {"bill", "school", "admin", "msc", "job", "danish", "friend", "travel", "other"})
+        self.assertEqual(set(p), {"bill", "school", "admin", "msc", "job", "danish", "friend", "body", "travel", "other"})
         self.assertEqual(p["danish"], {"done_week": 2, "open": 3, "last_done": "2026-10-26", "next_due": "2026-10-28",
                                        "waiting_mail": 2})
         self.assertEqual(p["msc"], {"done_week": 0, "open": 0, "last_done": None, "next_due": None, "waiting_mail": 0})

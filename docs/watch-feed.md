@@ -37,7 +37,7 @@ Agreed 2026-10-26 between One Inbox (the Pi side) and the Pokémon buddy watch f
 | `done` | int | Items cleared today (resets at local midnight). |
 | `xp` | int | Running total kept on the Pi, never resets. +1 per item done. |
 | `next` | string or null | Next item, max 20 characters, cut with "…". null when clear. |
-| `kind` | string or null | `bill`, `school`, `admin`, `msc`, `job`, `danish`, `friend`, `travel`, `other`. For discreet mode. |
+| `kind` | string or null | `bill`, `school`, `admin`, `msc`, `job`, `danish`, `friend`, `body`, `travel`, `other`. For discreet mode. |
 | `bill` | string or null | Next bill due as a short day ("Thu", "26 Oct"), null if none in 7 days. |
 | `mood` | string | `happy` (left = 0), `normal`, `hungry` (anything overdue), `lonely` (friend overdue, nothing else overdue), `sleepy` (after 22:00 with left > 0). First match in order: hungry, lonely, sleepy, happy, normal. |
 | `event` | string or null | Next calendar event that hasn't started, within 24 h. Max 20 characters, cut with "…". null if none. Added 2026-10-26. |
@@ -74,7 +74,7 @@ The watch keeps using `/feed/watch.json`, which stays under 1 KB for the Garmin'
 
 ### Pillars
 
-`today.json` also has `pillars`: one entry for every kind (`bill`, `school`, `admin`, `msc`, `job`, `danish`, `friend`, `travel`, `other`), each
+`today.json` also has `pillars`: one entry for every kind (`bill`, `school`, `admin`, `msc`, `job`, `danish`, `friend`, `body`, `travel`, `other`), each
 
 ```json
 {"done_week": 2, "open": 3, "waiting_mail": 1, "last_done": "2026-10-26", "next_due": "2026-10-28"}
@@ -86,7 +86,7 @@ The watch keeps using `/feed/watch.json`, which stays under 1 KB for the Garmin'
 - `last_done`: date of the most recent completion in the last 60 days, or null.
 - `next_due`: earliest deadline among the open to-dos, or null.
 
-A to-do's kind comes from keywords in its title, area and project (see `KIND_WORDS` in `agent.py`), so naming Things areas after the pillars ("Danish", "MSc", "Job") makes them line up.
+A to-do's kind comes from its Things tags first: one tag per Pocket Pal pillar (Danish, MSc, Job hunt, Kids, Home admin, Friends, Body; see `PILLAR_TAGS` and `TAG_KINDS` in `agent.py`), on the to-do or its project. Without one, keywords in its title, area and project guess it (`KIND_WORDS`). With `"auto_tag": true` in agent.json the agent writes each guess back to Things as the pillar's tag, once per to-do (remembered in ~/.config/onebox/tagged.json), so a wrong guess is fixed by changing the tag in Things.
 
 ## Done and skip from the watch or phone
 
