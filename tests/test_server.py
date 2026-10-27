@@ -220,6 +220,22 @@ class ServerTests(unittest.TestCase):
         p = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers={"X-OneInbox-Token": "w" * 20})[1])["pillars"]
         self.assertEqual(p["bill"]["waiting_mail"], 0)
 
+    def test_pal_round_trip(self):
+        W = {"X-OneInbox-Token": "w" * 20}
+        body = {"at": 1793000000, "pose": "proud", "focus": None, "line": "ALL PILLARS ON TRACK",
+                "pillars": [{"key": "danish", "label": "DANISH", "done": 3, "target": 3}]}
+        self.assertEqual(self.web.req(self.base, "POST", "/api/pal", body, W)[0], 401)  # the watch only reads
+        code, raw = self.web.req(self.base, "POST", "/api/pal", body, {"Authorization": "Bearer " + "c" * 20})
+        self.assertEqual((code, json.loads(raw)["pal_pose"]), (200, "proud"))
+        self.assertEqual(json.loads(self.web.req(self.base, "GET", "/api/pal", headers=W)[1])["line"], "ALL PILLARS ON TRACK")
+        code, raw = self.web.req(self.base, "GET", "/feed/watch.json", headers=W)
+        f = json.loads(raw)
+        self.assertEqual((f["pal_line"], f["pal_pose"], f["pal_pillars"]), ("ALL PILLARS ON TRACK", "proud", [["DANISH", 3, 3]]))
+        self.assertLess(len(raw), 1024)
+        t = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers=W)[1])
+        self.assertIsInstance(t["pillars"], dict)  # the Pi's own per-kind pillars stay as they were
+        self.assertEqual(self.web.req(self.base, "POST", "/api/pal", [1, 2], {"Authorization": "Bearer " + "c" * 20})[0], 400)
+
 
 if __name__ == "__main__":
     unittest.main()
