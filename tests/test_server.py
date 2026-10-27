@@ -133,6 +133,12 @@ class ServerTests(unittest.TestCase):
         self.assertLessEqual(len(f["next"]), 20)
         self.assertLess(len(raw), 1024)
 
+    def test_pihole_needs_a_token(self):
+        self.assertEqual(self.web.req(self.base, "GET", "/api/pihole")[0], 401)
+        code, raw = self.web.req(self.base, "GET", "/api/pihole", headers={"X-OneInbox-Token": "w" * 20})
+        self.assertEqual(code, 200)
+        self.assertIn(json.loads(raw)["status"], ("enabled", "disabled", "locked", "unreachable", "unknown"))
+
     def test_today_feed_lists_every_item(self):
         self.assertEqual(self.web.req(self.base, "GET", "/feed/today.json")[0], 401)
         items = [{"title": f"Item {i}", "kind": "admin", "due": None} for i in range(12)]
