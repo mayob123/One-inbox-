@@ -26,6 +26,7 @@ The script creates a `onebox` system user, puts the app in `/opt/one-inbox`, wri
 | `ONEBOX_AGENT_TOKEN` | The Mac agent |
 | `ONEBOX_WATCH_TOKEN` | The watch face, sent as `X-OneInbox-Token` |
 | `ONEBOX_CAPTURE_TOKEN` | The "Add to One Inbox" iPhone Shortcut (section 6). Added to older installs on update. |
+| `PIHOLE_PASSWORD` | Optional. An app password from Pi-hole's web page (Settings → Web interface / API), so Pocket Pal's PC can show Pi-hole's numbers through `GET /api/pihole`. Add it to /etc/onebox.env by hand; `PIHOLE_URL` defaults to `http://127.0.0.1`. |
 
 Update later with `git pull && sudo ./deploy/install-pi.sh` (keys are kept). Logs: `journalctl -u onebox -f`.
 
