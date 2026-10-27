@@ -13,8 +13,10 @@ event's UID and start time, so a moved session is added again at its new time.
 
 Config (in ~/.config/onebox/agent.json):
 
-  "calendars": [{"name": "York MSc", "url": "webcal://…/calendar.ics", "list": "York MSc"}],
-  "deadlines": [{"title": "Module 1 assignment", "due": "2026-12-14", "list": "York MSc"}]
+  "calendars": [{"name": "York MSc", "url": "webcal://…/calendar.ics", "tags": ["MSc"]}],
+  "deadlines": [{"title": "Module 1 assignment", "due": "2026-12-14", "tags": ["MSc"]}]
+
+"list" (a Things area or project) and "tags" (existing Things tag names) are both optional.
 
 Standard library only. Handles the .ics that Moodle, Canvas, Blackboard and
 MyTimetable export: single events with UTC, TZID or all-day dates. Repeating
@@ -58,6 +60,7 @@ class Event:
     description: str = ""
     calendar: str = ""
     list: str = ""
+    tags: list = field(default_factory=lambda: [])  # "list" above shadows the builtin here
     extra: dict = field(default_factory=dict)
 
     @property
@@ -160,7 +163,8 @@ def config_deadlines(items: list[dict], local_tz) -> list[Event]:
     for d in items or []:
         due = datetime.strptime(d["due"], "%Y-%m-%d").date()
         out.append(Event(uid=f"cfg:{d['title']}", title=d["title"], start=due, calendar="config",
-                         list=d.get("list", ""), description=d.get("notes", ""), extra={"deadline": True}))
+                         list=d.get("list", ""), tags=list(d.get("tags") or []),
+                         description=d.get("notes", ""), extra={"deadline": True}))
     return out
 
 
@@ -185,6 +189,8 @@ def todos_for(ev: Event, today: date) -> list[dict]:
     base = {"notes": notes_for(ev)}
     if ev.list:
         base["list"] = ev.list
+    if ev.tags:
+        base["tags"] = ev.tags
     if ev.is_deadline:
         due = day_of(ev.start)
         due_txt = due.strftime("%a %-d %b")
@@ -244,7 +250,10 @@ def collect(cfg: dict, now: datetime, fetcher=fetch) -> tuple[list[Event], list[
     for c in cfg.get("calendars") or []:
         name = c.get("name", "calendar")
         try:
-            events += parse_ics(fetcher(c["url"]), name, c.get("list", ""), tz)
+            found = parse_ics(fetcher(c["url"]), name, c.get("list", ""), tz)
+            for ev in found:
+                ev.tags = list(c.get("tags") or [])
+            events += found
         except Exception as e:  # one broken feed shouldn't stop mail sync
             errors.append(f"{name}: {e}")
     events += config_deadlines(cfg.get("deadlines"), tz)

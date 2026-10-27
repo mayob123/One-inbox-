@@ -148,6 +148,16 @@ class TodoTests(unittest.TestCase):
         self.assertTrue(ev.is_deadline)
         self.assertEqual(studycal.todos_for(ev, NOW.date())[0]["deadline"], "2026-12-14")
 
+    def test_tags_from_config_reach_things(self):
+        cfg = {"calendars": [{"name": "York MSc", "url": "feed", "tags": ["MSc"]}],
+               "deadlines": [{"title": "Register for module", "due": "2026-12-01", "tags": ["MSc"]}]}
+        events, errors = studycal.collect(cfg, NOW, fetcher=lambda url: ICS)
+        self.assertEqual(errors, [])
+        todos = studycal.things_json(studycal.due_now(events, {}, NOW), NOW.date())
+        self.assertTrue(todos)
+        self.assertTrue(all(t["attributes"]["tags"] == ["MSc"] for t in todos))
+        self.assertNotIn("list", todos[0]["attributes"])
+
     def test_broken_feed_is_reported_not_raised(self):
         def boom(url):
             raise OSError("offline")

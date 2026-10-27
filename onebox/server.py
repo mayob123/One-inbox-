@@ -3,7 +3,8 @@
 Run:  python3 -m onebox.server
 Config comes from environment variables (see docs/setup.md):
   ONEBOX_DB, ONEBOX_HOST, ONEBOX_PORT, ONEBOX_TZ,
-  ONEBOX_UI_KEY, ONEBOX_AGENT_TOKEN, ONEBOX_WATCH_TOKEN, ONEBOX_CAPTURE_TOKEN (optional)
+  ONEBOX_UI_KEY, ONEBOX_AGENT_TOKEN, ONEBOX_WATCH_TOKEN, ONEBOX_CAPTURE_TOKEN (optional),
+  PIHOLE_URL and PIHOLE_PASSWORD (optional, for Pocket Pal's PC)
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
 from . import feed
+from .pihole import PiHole
 from .store import Store
 from .triage import capture_item
 
@@ -41,6 +43,8 @@ class Config:
         self.agent_token = env.get("ONEBOX_AGENT_TOKEN", "")
         self.watch_token = env.get("ONEBOX_WATCH_TOKEN", "")
         self.capture_token = env.get("ONEBOX_CAPTURE_TOKEN", "")  # for the iPhone Shortcut; optional
+        self.pihole_url = env.get("PIHOLE_URL", "http://127.0.0.1")
+        self.pihole_password = env.get("PIHOLE_PASSWORD", "")
         missing = [n for n, v in [("ONEBOX_UI_KEY", self.ui_key), ("ONEBOX_AGENT_TOKEN", self.agent_token),
                                   ("ONEBOX_WATCH_TOKEN", self.watch_token)] if len(v) < 16]
         if self.capture_token and len(self.capture_token) < 16:
@@ -55,6 +59,7 @@ def _same(a: str, b: str) -> bool:
 
 def make_handler(cfg: Config, store: Store):
     ui_cookie_value = hashlib.sha256(("onebox:" + cfg.ui_key).encode()).hexdigest()
+    pihole = PiHole(cfg.pihole_url, cfg.pihole_password)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "OneInbox/1"
@@ -127,6 +132,10 @@ def make_handler(cfg: Config, store: Store):
                 if not self._todo_ok():
                     return self._send(401)
                 return self._json(200, store.get_meta("pal") or {})
+            if path == "/api/pihole":
+                if not self._todo_ok():
+                    return self._send(401)
+                return self._json(200, pihole.summary())
             if path == "/":
                 if not self._ui_ok():
                     return self._send(200, (WEB_DIR / "login.html").read_bytes(), "text/html; charset=utf-8")

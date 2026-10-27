@@ -109,3 +109,9 @@ The phone decides how Lyra looks and what she says; the Pi only stores the lates
   Unknown fields are dropped, text is trimmed (labels and keys to 20, line to 80), counts are clamped to 0–999, at most 12 pillars. The reply is `{"ok": true, pal_line, pal_pose, pal_pillars}`.
 - `GET /api/pal` with the watch token or the capture token returns the stored state, plus `received_at` (Pi time, epoch seconds), or `{}` if none.
 - `watch.json` and `today.json` carry the compact `pal_line`, `pal_pose` and `pal_pillars` above. In `today.json`, `pillars` remains the Pi's own per-kind counts.
+
+## Pi-hole (Pocket Pal's PC)
+
+`GET /api/pihole` with the watch token or the capture token returns Pi-hole v6's numbers from the same Pi, cached for a minute:
+`{"status": "enabled", "queries": 12000, "blocked": 1500, "percent": 12.5, "clients": 6, "domains_blocked": 180000, "top_blocked": [{"domain", "count"}], "at": <epoch>}`.
+`status` is `enabled`, `disabled`, `locked` (set `PIHOLE_PASSWORD`) or `unreachable`; the numbers are missing unless it's enabled or disabled.

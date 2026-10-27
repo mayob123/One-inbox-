@@ -26,6 +26,7 @@ The script creates a `onebox` system user, puts the app in `/opt/one-inbox`, wri
 | `ONEBOX_AGENT_TOKEN` | The Mac agent |
 | `ONEBOX_WATCH_TOKEN` | The watch face, sent as `X-OneInbox-Token` |
 | `ONEBOX_CAPTURE_TOKEN` | The "Add to One Inbox" iPhone Shortcut (section 6). Added to older installs on update. |
+| `PIHOLE_PASSWORD` | Optional. An app password from Pi-hole's web page (Settings → Web interface / API), so Pocket Pal's PC can show Pi-hole's numbers through `GET /api/pihole`. Add it to /etc/onebox.env by hand; `PIHOLE_URL` defaults to `http://127.0.0.1`. |
 
 Update later with `git pull && sudo ./deploy/install-pi.sh` (keys are kept). Logs: `journalctl -u onebox -f`.
 
@@ -96,7 +97,7 @@ launchctl load ~/Library/LaunchAgents/com.oneinbox.agent.plist
 tail -f /tmp/onebox-agent.log
 ```
 
-Mail must have your accounts added (mac.com and Gmail already are). Spark can stay your reading app; the agent reads Mail's index, which syncs in the background.
+Mail only downloads new mail while it's open, so the agent starts it hidden in the background whenever it finds it closed (turn that off with `"keep_mail_open": false` in `agent.json`). Mail must have your accounts added (mac.com and Gmail already are). Spark can stay your reading app; the agent reads Mail's index, which syncs in the background.
 
 ## 5. On your iPhone
 
@@ -131,6 +132,8 @@ A new alert from `e-boks.dk`, `mit.dk`, `digitalpost.dk`, `borger.dk` or `aula.d
 
 The agent reads Calendar.app's database (read-only) for "up next" on the watch. Every calendar Calendar.app shows counts: iCloud, Google, Exchange, and subscribed ones. For MSc lectures from an ICS link, use Calendar → File → New Calendar Subscription and paste the link. Leave calendars out with `"calendar_skip": ["Birthdays", "Work"]` in `agent.json` (the default skips Birthdays, Holidays and Siri Suggestions). `--dry-run` shows how many events it found.
 
+Interviews from the job tracker (`~/Documents/job-tracker/data/job_tracker.db`, read-only) join these events as "Interview: <company>". The job hunt pillar in `today.json` also gets `job_due` (the next deadline of a saved application or a Strong/Possible fit lead), `leads`, `applied_week` and `interview_at`. Point at another file with `"job_tracker_db"` in `agent.json`, or set it to `""` to turn it off.
+
 ## 9. Ticking things off from the watch or phone
 
 When you press done on the watch or in the phone app, the Pi hides the item straight away and the Mac ticks it off in Things on its next sync. Things only lets other apps change to-dos with its own key: in Things on the Mac, Settings → General → Enable Things URLs → Manage, copy the authorization token and add it to `~/.config/onebox/agent.json` as `"things_auth_token": "<token>"`. Without it the Mac's report says how many are waiting.
@@ -152,14 +155,14 @@ Get the feed link from the VLE's calendar (look for **Export calendar**, **Calen
 
 ```json
 "calendars": [
-  {"name": "York MSc", "url": "webcal://…/calendar.ics", "list": "York MSc"}
+  {"name": "York MSc", "url": "webcal://…/calendar.ics", "tags": ["MSc"]}
 ],
 "deadlines": [
-  {"title": "Module 1 assignment", "due": "2026-12-14", "list": "York MSc"}
+  {"title": "Module 1 assignment", "due": "2026-12-14", "tags": ["MSc"]}
 ]
 ```
 
-- `list` is a Things area or project. Make an area called **York MSc** so the watch marks these as MSc in discreet mode. Leave it out to use the Things Inbox.
+- `tags` are Things tag names, for example `["MSc"]` so the to-dos count toward the MSc pillar. The tag must already exist in Things. `list` (optional) is a Things area or project; leave it out to use the Things Inbox.
 - `deadlines` is for dates that are only in a handbook or an email. Same heads-ups as the feed.
 
 Check what it would add with `python3 -m onebox.agent --dry-run` (see `calendar.would_add`). Each event is added once; the agent remembers them in `~/.config/onebox/calendar-seen.json`. If a session moves, the new time is added as a new to-do; tick off or delete the old one.
