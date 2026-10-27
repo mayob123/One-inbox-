@@ -97,7 +97,7 @@ launchctl load ~/Library/LaunchAgents/com.oneinbox.agent.plist
 tail -f /tmp/onebox-agent.log
 ```
 
-Mail must have your accounts added (mac.com and Gmail already are). Spark can stay your reading app; the agent reads Mail's index, which syncs in the background.
+Mail only downloads new mail while it's open, so the agent starts it hidden in the background whenever it finds it closed (turn that off with `"keep_mail_open": false` in `agent.json`). Mail must have your accounts added (mac.com and Gmail already are). Spark can stay your reading app; the agent reads Mail's index, which syncs in the background.
 
 ## 5. On your iPhone
 
@@ -131,6 +131,8 @@ A new alert from `e-boks.dk`, `mit.dk`, `digitalpost.dk`, `borger.dk` or `aula.d
 ## 8. Calendar on the watch
 
 The agent reads Calendar.app's database (read-only) for "up next" on the watch. Every calendar Calendar.app shows counts: iCloud, Google, Exchange, and subscribed ones. For MSc lectures from an ICS link, use Calendar → File → New Calendar Subscription and paste the link. Leave calendars out with `"calendar_skip": ["Birthdays", "Work"]` in `agent.json` (the default skips Birthdays, Holidays and Siri Suggestions). `--dry-run` shows how many events it found.
+
+Interviews from the job tracker (`~/Documents/job-tracker/data/job_tracker.db`, read-only) join these events as "Interview: <company>". The job hunt pillar in `today.json` also gets `job_due` (the next deadline of a saved application or a Strong/Possible fit lead), `leads`, `applied_week` and `interview_at`. Point at another file with `"job_tracker_db"` in `agent.json`, or set it to `""` to turn it off.
 
 ## 9. Ticking things off from the watch or phone
 

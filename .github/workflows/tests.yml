@@ -1,5 +1,8 @@
 name: tests
-on: [push, pull_request]
+on:  # once per PR commit, plus merges to claude/v1 (saves Actions minutes)
+  push:
+    branches: [claude/v1]
+  pull_request:
 jobs:
   test:
     runs-on: ubuntu-24.04  # Python 3.9 (the Mac's Xcode Python) is not built for newer Ubuntu images

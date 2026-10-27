@@ -4,7 +4,8 @@ Each run it:
   1. reads mail headers from Mail's local index (read-only, no bodies),
   2. sorts them (triage.py) and sends the result to the Pi,
   3. reads Things 3 (read-only) for today's count, next item, bills and XP,
-     and Calendar (read-only) for the next few events,
+     Calendar (read-only) for the next few events, and the job tracker (read-only) for
+     interviews and application deadlines,
   4. adds anything Ben marked "Add" on his phone to Things, via the Things URL scheme,
   5. adds study sessions and deadlines from his calendar feeds to Things (studycal.py).
 
@@ -41,6 +42,8 @@ CALENDAR_DBS = (  # newer macOS first
 CALENDAR_SKIP = ("Birthdays", "Fødselsdage", "Holidays in Denmark", "Helligdage i Danmark", "Siri Suggestions")
 CONFIG_PATH = Path(os.environ.get("ONEBOX_AGENT_CONFIG", HOME / ".config/onebox/agent.json"))
 CALENDAR_SEEN = CONFIG_PATH.parent / "calendar-seen.json"
+JOB_TRACKER_DB = str(HOME / "Documents/job-tracker/data/job_tracker.db")
+JOB_LEADS = ("Strong fit", "Possible fit")  # job tracker fit tiers worth a deadline nudge
 
 SKIP_MAILBOXES = ("junk", "spam", "trash", "deleted", "drafts", "blocked", "outbox")
 APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
@@ -309,6 +312,62 @@ def read_calendar(cfg: dict, now: datetime) -> tuple[list[dict], str]:
     return events, f"{len(events)} events in the next 48 h"
 
 
+# --- Job tracker -----------------------------------------------------------
+
+def job_tracker(db_path: str, now: datetime, days: int = 14) -> tuple[list[dict], dict]:
+    """Upcoming interviews as calendar-style events, and job hunt pillar extras: the next application
+    deadline, applications sent this week and good open leads. Dates in the tracker are naive local time.
+    Read-only: the tracker owns its database."""
+    today = now.date()
+    monday = (today - timedelta(days=today.weekday())).isoformat()
+    con = ro_connect(db_path)
+    try:
+        interviews = con.execute(
+            """SELECT company, interview_at FROM applications
+               WHERE interview_at >= ? AND interview_at < ? AND status NOT IN ('rejected', 'withdrawn')
+               ORDER BY interview_at""",
+            (now.strftime("%Y-%m-%d %H:%M"), (today + timedelta(days=days)).isoformat())).fetchall()
+        app_due = con.execute("SELECT MIN(deadline) FROM applications WHERE status = 'saved' AND deadline >= ?",
+                              (today.isoformat(),)).fetchone()[0]
+        marks = ",".join("?" * len(JOB_LEADS))
+        leads, lead_due = con.execute(
+            f"""SELECT COUNT(*), MIN(CASE WHEN deadline >= ? THEN deadline END) FROM jobs
+                WHERE COALESCE(dismissed, 0) = 0 AND COALESCE(likely_closed, 0) = 0 AND fit_tier IN ({marks})""",
+            (today.isoformat(), *JOB_LEADS)).fetchone()
+        applied = con.execute("SELECT COUNT(*) FROM applications WHERE date_applied >= ?", (monday,)).fetchone()[0]
+    finally:
+        con.close()
+    events = []
+    for r in interviews:
+        try:
+            start = datetime.strptime(r["interview_at"][:16], "%Y-%m-%d %H:%M").replace(tzinfo=now.tzinfo)
+        except (TypeError, ValueError):
+            continue
+        events.append({"title": f"Interview: {r['company']}", "start": start.isoformat(timespec="minutes")})
+    dues = [d for d in (app_due, lead_due) if d]
+    extra = {"applied_week": applied, "leads": leads, "job_due": min(dues) if dues else None,
+             "interview_at": events[0]["start"] if events else None}
+    return events, extra
+
+
+def read_job_tracker(cfg: dict, status: dict, now: datetime) -> str:
+    """Adds the tracker's interviews to status["events"] and its deadlines to the job pillar."""
+    path = cfg.get("job_tracker_db", JOB_TRACKER_DB)
+    if not path or not os.path.exists(path):
+        return "Job tracker not found."
+    try:
+        events, extra = job_tracker(path, now)
+    except sqlite3.Error as e:  # the tracker's schema is its own; never let it stop a sync
+        return f"Could not read the job tracker: {e}"
+    status["events"] = sorted(status.get("events", []) + events, key=lambda e: e["start"])
+    job = status.setdefault("pillars", {}).setdefault(
+        "job", {"done_week": 0, "open": 0, "last_done": None, "next_due": None})
+    job.update(extra)
+    if extra["job_due"]:
+        job["next_due"] = min(job["next_due"] or extra["job_due"], extra["job_due"])
+    return f"{len(events)} interviews, {extra['leads']} good leads, next deadline {extra['job_due'] or 'none'}"
+
+
 # --- Friends (Messages) ---------------------------------------------------
 
 def friends_overdue(chat_db: str, friends: list[dict], now: datetime) -> int:
@@ -447,9 +506,22 @@ def load_config() -> dict:
     return cfg
 
 
+def wake_mail(cfg: dict) -> bool:
+    """Mail only fetches new messages (and so updates the index we read) while it is open.
+    Start it hidden in the background if it isn't running. Returns True if it had to be started."""
+    if not cfg.get("keep_mail_open", True) or sys.platform != "darwin":
+        return False
+    if subprocess.run(["pgrep", "-xq", "Mail"]).returncode == 0:
+        return False
+    subprocess.run(["open", "-g", "-j", "-a", "Mail"])
+    return True
+
+
 def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> dict:
     now = now or datetime.now().astimezone()
     report: dict = {}
+    if not dry_run and wake_mail(cfg):
+        report["mail_started"] = "Mail wasn't open, so new mail wasn't arriving. Started it in the background."
     mail_db = cfg.get("mail_db") or newest(MAIL_GLOB)
     items = []
     if mail_db:
@@ -466,6 +538,7 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
         status["pillars"] = things_pillars(things_db, now)
         status["friends_overdue"] = friends_overdue(cfg.get("messages_db", MESSAGES_DB), cfg.get("friends", []), now)
         status["events"], report["calendar"] = read_calendar(cfg, now)
+        report["job_tracker"] = read_job_tracker(cfg, status, now)
         payload["things"] = status
         report["things"] = {k: v for k, v in status.items() if k != "completed_ids"}
     if dry_run:

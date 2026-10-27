@@ -83,6 +83,33 @@ def make_calendar(path):
     con.close()
 
 
+def make_job_tracker(path):
+    con = sqlite3.connect(path)
+    con.executescript("""
+        CREATE TABLE applications (id INTEGER PRIMARY KEY, job_title TEXT, company TEXT, date_applied TEXT,
+            status TEXT, deadline TEXT, interview_at TEXT);
+        CREATE TABLE jobs (id INTEGER PRIMARY KEY, title TEXT, company TEXT, deadline TEXT, dismissed INTEGER,
+            likely_closed INTEGER, fit_tier TEXT);
+    """)
+    fmt = lambda d: d.strftime("%Y-%m-%d %H:%M")
+    day = lambda n: (NOW.date() + timedelta(days=n)).isoformat()
+    con.executemany("INSERT INTO applications (company, date_applied, status, deadline, interview_at) VALUES (?,?,?,?,?)", [
+        ("DTU", NOW.date().isoformat(), "interview", None, fmt(NOW + timedelta(hours=5))),
+        ("Old Co", day(-30), "interview", None, fmt(NOW - timedelta(days=7))),      # past
+        ("Gone Co", day(-30), "withdrawn", None, fmt(NOW + timedelta(hours=2))),    # withdrawn
+        ("Saved Co", None, "saved", day(6), None),
+        ("Late Co", None, "saved", day(-1), None),                                  # deadline passed
+    ])
+    con.executemany("INSERT INTO jobs (title, deadline, dismissed, likely_closed, fit_tier) VALUES (?,?,?,?,?)", [
+        ("Strong", day(4), 0, 0, "Strong fit"),
+        ("Possible", None, 0, 0, "Possible fit"),
+        ("Long", day(1), 0, 0, "Long shot"),
+        ("Dismissed", day(1), 1, 0, "Strong fit"),
+    ])
+    con.commit()
+    con.close()
+
+
 class AgentTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -181,6 +208,40 @@ class AgentTests(unittest.TestCase):
         self.assertTrue(all(u.startswith("things:///update?") and "add-tags=" in u for u in opened))
         with open(tagged) as f:
             self.assertEqual(json.load(f), {"t1": "Danish", "t2": "Home admin"})
+
+    def test_job_tracker(self):
+        db = os.path.join(self.dir.name, "job_tracker.db")
+        make_job_tracker(db)
+        status = {"events": [{"title": "Lecture", "start": (NOW + timedelta(hours=1)).isoformat()}],
+                  "pillars": {"job": {"done_week": 1, "open": 2, "last_done": None, "next_due": None}}}
+        agent.read_job_tracker({"job_tracker_db": db}, status, NOW)
+        self.assertEqual([e["title"] for e in status["events"]], ["Lecture", "Interview: DTU"])
+        job = status["pillars"]["job"]
+        due = (NOW.date() + timedelta(days=4)).isoformat()
+        self.assertEqual((job["next_due"], job["job_due"], job["leads"], job["applied_week"], job["open"]),
+                         (due, due, 2, 1, 2))
+        self.assertEqual(datetime.fromisoformat(job["interview_at"]),
+                         (NOW + timedelta(hours=5)).replace(second=0, microsecond=0))
+        self.assertEqual(agent.read_job_tracker({"job_tracker_db": self.mail}, {}, NOW)[:9], "Could not")
+        self.assertEqual(agent.read_job_tracker({"job_tracker_db": "/nonexistent"}, {}, NOW), "Job tracker not found.")
+
+    def test_wake_mail_starts_mail_only_when_closed(self):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return type("R", (), {"returncode": 1 if cmd[0] == "pgrep" else 0})()
+
+        real_run, real_platform = agent.subprocess.run, agent.sys.platform
+        agent.subprocess.run, agent.sys.platform = fake_run, "darwin"
+        try:
+            self.assertTrue(agent.wake_mail({}))
+            self.assertEqual(calls[-1], ["open", "-g", "-j", "-a", "Mail"])
+            calls.clear()
+            self.assertFalse(agent.wake_mail({"keep_mail_open": False}))
+            self.assertEqual(calls, [])
+        finally:
+            agent.subprocess.run, agent.sys.platform = real_run, real_platform
 
     def test_things_done_url(self):
         url = agent.things_done_url("ABC123", "tok&en")
