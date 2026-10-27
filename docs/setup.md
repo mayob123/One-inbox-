@@ -132,6 +132,8 @@ A new alert from `e-boks.dk`, `mit.dk`, `digitalpost.dk`, `borger.dk` or `aula.d
 
 The agent reads Calendar.app's database (read-only) for "up next" on the watch. Every calendar Calendar.app shows counts: iCloud, Google, Exchange, and subscribed ones. For MSc lectures from an ICS link, use Calendar → File → New Calendar Subscription and paste the link. Leave calendars out with `"calendar_skip": ["Birthdays", "Work"]` in `agent.json` (the default skips Birthdays, Holidays and Siri Suggestions). `--dry-run` shows how many events it found.
 
+Interviews from the job tracker (`~/Documents/job-tracker/data/job_tracker.db`, read-only) join these events as "Interview: <company>". The job hunt pillar in `today.json` also gets `job_due` (the next deadline of a saved application or a Strong/Possible fit lead), `leads`, `applied_week` and `interview_at`. Point at another file with `"job_tracker_db"` in `agent.json`, or set it to `""` to turn it off.
+
 ## 9. Ticking things off from the watch or phone
 
 When you press done on the watch or in the phone app, the Pi hides the item straight away and the Mac ticks it off in Things on its next sync. Things only lets other apps change to-dos with its own key: in Things on the Mac, Settings → General → Enable Things URLs → Manage, copy the authorization token and add it to `~/.config/onebox/agent.json` as `"things_auth_token": "<token>"`. Without it the Mac's report says how many are waiting.
