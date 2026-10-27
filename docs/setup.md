@@ -155,14 +155,14 @@ Get the feed link from the VLE's calendar (look for **Export calendar**, **Calen
 
 ```json
 "calendars": [
-  {"name": "York MSc", "url": "webcal://…/calendar.ics", "list": "York MSc"}
+  {"name": "York MSc", "url": "webcal://…/calendar.ics", "tags": ["MSc"]}
 ],
 "deadlines": [
-  {"title": "Module 1 assignment", "due": "2026-12-14", "list": "York MSc"}
+  {"title": "Module 1 assignment", "due": "2026-12-14", "tags": ["MSc"]}
 ]
 ```
 
-- `list` is a Things area or project. Make an area called **York MSc** so the watch marks these as MSc in discreet mode. Leave it out to use the Things Inbox.
+- `tags` are Things tag names, for example `["MSc"]` so the to-dos count toward the MSc pillar. The tag must already exist in Things. `list` (optional) is a Things area or project; leave it out to use the Things Inbox.
 - `deadlines` is for dates that are only in a handbook or an email. Same heads-ups as the feed.
 
 Check what it would add with `python3 -m onebox.agent --dry-run` (see `calendar.would_add`). Each event is added once; the agent remembers them in `~/.config/onebox/calendar-seen.json`. If a session moves, the new time is added as a new to-do; tick off or delete the old one.
