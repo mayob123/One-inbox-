@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 from . import feed
 from .pihole import PiHole
 from .store import Store
-from .triage import capture_item
+from .triage import OFFICIAL_POST, capture
 
 WEB_DIR = Path(__file__).parent / "web"
 COOKIE = "onebox_key"
@@ -126,8 +126,15 @@ def make_handler(cfg: Config, store: Store):
                 pal = store.get_meta("pal")
                 if path == "/feed/watch.json":
                     return self._json(200, feed.build(status, store.xp(), self._now(), self._todo_state(), pal))
-                waiting = Counter(i.get("kind") for i in store.items() if i["status"] == "decide" and not i["decision"])
-                return self._json(200, feed.today(status, store.xp(), self._now(), self._todo_state(), waiting, pal))
+                items = store.items()
+                waiting = Counter(i.get("kind") for i in items if i["status"] == "decide" and not i["decision"]
+                                  and not i.get("post"))
+                return self._json(200, feed.today(status, store.xp(), self._now(), self._todo_state(), waiting, pal,
+                                                  feed.post_summary(items, self._now())))
+            if path == "/api/post":
+                if not (self._agent_ok() or self._todo_ok()):
+                    return self._send(401)
+                return self._json(200, {"sources": feed.post_summary(store.items(), self._now())})
             if path == "/api/pal":
                 if not self._todo_ok():
                     return self._send(401)
@@ -138,7 +145,7 @@ def make_handler(cfg: Config, store: Store):
                 keep = ("id", "title", "task", "kind", "area", "sender", "received", "why", "excerpt", "links",
                         "attachments", "saved", "mail_link")
                 waiting = [{k: i[k] for k in keep if i.get(k)} for i in store.items()
-                           if i["status"] == "decide" and not i["decision"]]
+                           if i["status"] == "decide" and not i["decision"] and not i.get("post")]
                 return self._json(200, {"items": waiting})
             if path == "/api/pihole":
                 if not self._todo_ok():
@@ -192,24 +199,39 @@ def make_handler(cfg: Config, store: Store):
                 if path == "/api/capture":
                     if not self._capture_ok():
                         return self._send(401)
-                    text = str(self._body().get("text") or "").strip()
+                    body = self._body()
+                    text = str(body.get("text") or "").strip()
                     if not text or len(text) > MAX_CAPTURE:
                         return self._json(400, {"error": f"Send 1 to {MAX_CAPTURE} characters of text."})
-                    item = capture_item(text, self._now()).to_dict()
+                    item = capture(text, self._now(), {k: body.get(k) for k in ("when", "tags", "list", "deadline")})
                     store.upsert_items([item])
-                    return self._json(200, {"ok": True, "id": item["id"], "task": item["task"],
-                                            "message": "Got it. It goes to Things on your next Mac sync."})
+                    where = {"anytime": "Anytime", "someday": "Someday"}.get(item.get("when"), "Today")
+                    return self._json(200, {"ok": True, "id": item["id"], "task": item["task"], "when": where,
+                                            "message": f"Got it. It goes to Things {where} on your next Mac sync."})
                 if path == "/api/quiet/remove":
                     if not self._ui_ok():
                         return self._send(401)
                     return self._json(200, {"ok": store.unquiet(str(self._body().get("sender", "")))})
+                if path == "/api/post/checked":
+                    if not self._todo_ok():
+                        return self._send(401)
+                    source = str(self._body().get("source") or "")
+                    if source not in OFFICIAL_POST:
+                        return self._json(400, {"error": "source must be one of " + ", ".join(OFFICIAL_POST)})
+                    n = store.check_post(source)
+                    # tick the rolling "Check Aula (3 new)" to-do too; the Mac completes it in Things
+                    for r in store.get_meta("things_status", {}).get("today") or []:
+                        if r.get("id") and (r.get("title") or "").startswith(f"Check {source} ("):
+                            store.todo_action(r["id"], "done", self._now().date().isoformat())
+                    return self._json(200, {"ok": True, "checked": n})
                 m = re.fullmatch(r"/api/todo/(done|skip)", path)
                 if m:
                     if not self._todo_ok():
                         return self._send(401)
                     uuid = str(self._body().get("id") or "")
-                    rows = store.get_meta("things_status", {}).get("today") or []
-                    if uuid not in {r.get("id") for r in rows}:
+                    status = store.get_meta("things_status", {})
+                    known = {r.get("id") for k in ("today", "pool", "week") for r in status.get(k) or []}
+                    if uuid not in known:
                         return self._json(404, {"error": "Not in today's Things list."})
                     store.todo_action(uuid, m.group(1), self._now().date().isoformat())
                     status = store.get_meta("things_status", {})
@@ -232,6 +254,8 @@ def make_handler(cfg: Config, store: Store):
                     if "things" in body:
                         status = dict(body["things"])
                         store.record_completed(status.pop("completed_ids", []))
+                        for source, at in (status.pop("post_done", None) or {}).items():
+                            store.check_post(source, at)  # Ben ticked "Check Aula" in Things
                         store.set_meta("things_status", status)
                     store.set_meta("last_sync", self._now().isoformat(timespec="seconds"))
                     return self._json(200, {"ok": True, "items": n})

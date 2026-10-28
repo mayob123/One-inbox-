@@ -266,6 +266,82 @@ class AgentTests(unittest.TestCase):
         data = json.loads(urllib.parse.unquote(url.split("=", 1)[1]))
         self.assertEqual(data[0]["attributes"]["when"], "today")
 
+    def test_captures_can_say_where_they_go(self):
+        url = agent.things_add_url([{"task": "Pick up frames", "title": "Pick up frames", "sender": "You",
+                                     "received": "2026-10-22T00:00:00", "auto": "things", "when": "anytime",
+                                     "tags": ["Errands"], "list": "Around the house", "deadline": "2026-10-30"}])
+        a = json.loads(urllib.parse.unquote(url.split("=", 1)[1]))[0]["attributes"]
+        self.assertEqual((a["when"], a["tags"], a["list"], a["deadline"]),
+                         ("anytime", ["Errands"], "Around the house", "2026-10-30"))
+
+    def test_post_plan_keeps_one_check_todo_per_source(self):
+        aula = {"source": "Aula", "count": 2, "since": "2026-10-26T08:00:00+01:00",
+                "items": [{"id": "a", "title": "Ny besked", "received": "2026-10-26T08:00:00+01:00"},
+                          {"id": "b", "title": "Ny besked fra Lærer", "received": "2026-10-27T14:02:00+01:00"}]}
+        eboks = {"source": "e-Boks", "count": 0, "items": []}
+        plan = agent.post_plan([aula, eboks], {})
+        self.assertEqual(len(plan), 1)
+        op, a = plan[0]
+        self.assertEqual((op, a["title"], a["when"], a["tags"]), ("add", "Check Aula (2 new)", "today", ["Family"]))
+        self.assertIn("Ny besked fra Lærer", a["notes"])
+        bullets = [line for line in a["notes"].splitlines() if line.startswith("• ")]
+        self.assertEqual(len(bullets), 2)
+        self.assertTrue(bullets[0].endswith("Ny besked fra Lærer"))  # newest first
+        # already there with the same count: nothing to do; a new alert: update the one to-do
+        self.assertEqual(agent.post_plan([aula], {"Aula": ("U1", "Check Aula (2 new)")}), [])
+        plan = agent.post_plan([dict(aula, count=3)], {"Aula": ("U1", "Check Aula (2 new)")})
+        self.assertEqual([(op, a["id"], a["title"]) for op, a in plan], [("update", "U1", "Check Aula (3 new)")])
+
+    def test_post_todos_in_things(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "things.sqlite")
+            make_things(path)
+            con = sqlite3.connect(path)
+            stop = NOW.timestamp() - 600
+            con.executemany("INSERT INTO TMTask VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", [
+                ("p1", "Check Aula (3 new)", 0, 0, 0, 1, agent.things_date(NOW.date()), 3, None, None, None, None),
+                ("p2", "Check e-Boks (1 new)", 0, 3, 0, 1, agent.things_date(NOW.date()), 0, stop, None, None, None),
+                ("p3", "Check the tyres", 0, 0, 0, 1, None, 0, None, None, None, None),
+            ])
+            con.commit()
+            con.close()
+            self.assertEqual(agent.open_post_todos(path), {"Aula": ("p1", "Check Aula (3 new)")})
+            s = agent.things_status(path, NOW)
+            self.assertEqual(list(s["post_done"]), ["e-Boks"])
+            self.assertEqual(datetime.fromisoformat(s["post_done"]["e-Boks"]).timestamp(), int(stop))
+
+    def test_small_jobs_pool_and_this_week(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "things.sqlite")
+            make_things(path)
+            con = sqlite3.connect(path)
+            td = agent.things_date
+            con.executescript("CREATE TABLE TMTag (uuid TEXT, title TEXT); CREATE TABLE TMTaskTag (tasks TEXT, tags TEXT);"
+                              "INSERT INTO TMTag VALUES ('g1', 'Errands'), ('g2', '5 min'), ('g3', 'Home admin');")
+            con.executemany("INSERT INTO TMTask VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", [
+                ("H", "Around the house", 1, 0, 0, 1, None, 0, None, None, None, None),  # the project itself
+                ("j1", "Bulb in the master bedroom", 0, 0, 0, 1, None, 0, None, None, None, "H"),
+                ("j2", "Pick up frames", 0, 0, 0, 1, None, 0, None, None, None, None),
+                ("j3", "Hang pictures", 0, 0, 0, 2, None, 0, None, None, None, "H"),
+                ("j4", "Not a small job", 0, 0, 0, 1, None, 0, None, None, None, None),
+                ("j5", "Scheduled errand", 0, 0, 0, 1, td(NOW.date() + timedelta(days=2)), 0, None, None, None, None),
+                ("w1", "Trip form", 0, 0, 0, 1, None, 0, None, td(NOW.date() + timedelta(days=3)), None, None),
+                ("w2", "Later form", 0, 0, 0, 1, None, 0, None, td(NOW.date() + timedelta(days=12)), None, None),
+            ])
+            con.executemany("INSERT INTO TMTaskTag VALUES (?, ?)", [("j2", "g1"), ("j5", "g1"), ("j1", "g2")])
+            con.commit()
+            con.close()
+            s = agent.things_status(path, NOW)
+        pool = {r["id"]: r for r in s["pool"]}
+        self.assertEqual(set(pool), {"j1", "j2", "j3"})
+        self.assertEqual((pool["j1"]["quick"], pool["j1"]["project"]), (True, "Around the house"))
+        self.assertEqual((pool["j2"]["errand"], pool["j3"]["someday"]), (True, True))
+        week = [r["id"] for r in s["week"]]
+        self.assertIn("w1", week)
+        self.assertIn("t4", week)  # overdue, scheduled for later: still this week's business
+        self.assertNotIn("w2", week)
+        self.assertNotIn("t2", week)  # already in Today
+
     def test_mail_details_from_emlx(self):
         raw = (b"Message-ID: <abc123@mail.dk>\r\nFrom: Adil <adil@welcometodanmark.dk>\r\nSubject: Re: manglende lektier\r\n"
                b"Content-Type: text/plain; charset=utf-8\r\n\r\n"

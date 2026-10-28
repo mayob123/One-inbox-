@@ -50,19 +50,25 @@ def next_event(events: list[dict], now: datetime) -> tuple[str | None, str | Non
 
 def apply_actions(status: dict, actions: dict | None) -> dict:
     """Drop items ticked on the watch or phone and move skipped ones to the end, before the Mac
-    has caught up. Works on a copy; an old agent without ids or a today list is left as is."""
-    rows = status.get("today")
-    if not actions or not rows:
+    has caught up. Works on a copy; an old agent without ids or a today list is left as is.
+    Ticks in the small-jobs pool or this week's deadlines drop out of those lists too."""
+    rows = status.get("today") or []
+    lists = {k: status[k] for k in ("pool", "week") if status.get(k)}
+    if not actions or not (rows or lists):
         return status
     done, skip = set(actions.get("done", [])), list(actions.get("skip", []))
+    extra = {k: [r for r in v if r.get("id") not in done] for k, v in lists.items()}
+    # an item can be in Today and in this week's list; count each tick once
+    ticked = {r.get("id") for v in [rows, *lists.values()] for r in v if r.get("id") in done}
+    out = {**status, **extra, "done_today": int(status.get("done_today", 0)) + len(ticked)}
+    if not rows:
+        return out
     kept = [r for r in rows if r.get("id") not in done]
     order = {u: i for i, u in enumerate(skip)}
     kept.sort(key=lambda r: (r.get("id") in order, order.get(r.get("id"), 0)))  # stable: skips last, oldest skip first
-    gone = len(rows) - len(kept)
     first = kept[0] if kept else None
-    return {**status, "today": kept,
-            "left": max(0, int(status.get("left", 0)) - gone),
-            "done_today": int(status.get("done_today", 0)) + gone,
+    return {**out, "today": kept,
+            "left": max(0, int(status.get("left", 0)) - (len(rows) - len(kept))),
             "next": first["title"] if first else None,
             "next_kind": first.get("kind") if first else None,
             "next_id": first.get("id") if first else None}
@@ -153,11 +159,64 @@ def pillars(status: dict, waiting_mail: dict, ticked: list[dict], now: datetime)
     return out
 
 
+POST_DAYS = 14  # unread alerts older than this stop counting
+POST_LIST_MAX = 10
+
+
+def post_summary(items: list[dict], now: datetime) -> list[dict]:
+    """Unread official post (Aula, e-Boks, Digital Post) per source, oldest alert first:
+    [{"source": "Aula", "count": 3, "since": iso, "latest": "Ny besked fra …", "items": [{"id", "title", "received"}]}].
+    `items` are the Pi's triage items; an alert is unread until Ben marks it checked."""
+    groups: dict = {}
+    for it in items:
+        src = it.get("post")
+        if not src or it.get("status") != "decide" or it.get("decision"):
+            continue
+        try:
+            received = datetime.fromisoformat(it["received"])
+        except (KeyError, ValueError):
+            continue
+        if received.tzinfo and now.tzinfo and now - received > timedelta(days=POST_DAYS):
+            continue
+        groups.setdefault(src, []).append(it)
+    out = []
+    for src, rows in sorted(groups.items()):
+        rows.sort(key=lambda r: r["received"])
+        out.append({"source": src, "count": len(rows), "since": rows[0]["received"],
+                    "latest": short(rows[-1].get("title"), TITLE_MAX),
+                    "items": [{"id": r["id"], "title": short(r.get("title"), TITLE_MAX), "received": r["received"]}
+                              for r in rows[-POST_LIST_MAX:]]})
+    return out
+
+
+POOL_MAX = 30
+WEEK_MAX = 10
+
+
+def _rows(rows: list[dict] | None, keys: tuple, limit: int) -> list[dict]:
+    out = []
+    for r in rows or []:
+        title = short(r.get("title"), TITLE_MAX)
+        if not title:
+            continue
+        e = {k: r.get(k) for k in keys if r.get(k) is not None}
+        e["title"] = title
+        e["kind"] = r.get("kind") if r.get("kind") in KINDS else "other"
+        out.append(e)
+    return out[:limit]
+
+
 def today(status: dict, xp: int, now: datetime, actions: dict | None = None,
-          waiting_mail: dict | None = None, pal: dict | None = None) -> dict:
-    """The watch feed plus every open item in Things Today, for the Pocket Pal phone app."""
+          waiting_mail: dict | None = None, pal: dict | None = None, post: list[dict] | None = None) -> dict:
+    """The watch feed plus every open item in Things Today, for the Pocket Pal phone app. Also the small-jobs
+    pool (Around the house, Errands, 5 min), this week's deadlines outside Today and unread official post."""
     done = set((actions or {}).get("done", []))
-    ticked = [r for r in status.get("today") or [] if r.get("id") in done]
+    seen: set = set()
+    ticked = []
+    for r in [*(status.get("today") or []), *(status.get("pool") or []), *(status.get("week") or [])]:
+        if r.get("id") in done and r.get("id") not in seen:
+            seen.add(r.get("id"))
+            ticked.append(r)
     life = pillars(status, waiting_mail or {}, ticked, now)
     status = apply_actions(status, actions)
     items = []
@@ -170,4 +229,7 @@ def today(status: dict, xp: int, now: datetime, actions: dict | None = None,
         if it.get("notes"):
             entry["notes"] = it["notes"]
         items.append(entry)
-    return {**build(status, xp, now, pal=pal), "items": items, "pillars": life}
+    return {**build(status, xp, now, pal=pal), "items": items, "pillars": life,
+            "week": _rows(status.get("week"), ("id", "due"), WEEK_MAX),
+            "pool": _rows(status.get("pool"), ("id", "project", "errand", "quick", "someday"), POOL_MAX),
+            "post": post or []}

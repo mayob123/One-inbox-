@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from onebox.triage import Message, capture_item, is_scam, normalize_subject, triage
+from onebox.triage import Message, capture, capture_item, is_scam, normalize_subject, triage
 
 T0 = datetime(2026, 10, 14, 9, 0, tzinfo=timezone.utc)
 
@@ -86,7 +86,7 @@ class TriageTests(unittest.TestCase):
         self.assertEqual(a, b)
         self.assertRegex(a, r"^[0-9a-f]{16}$")
 
-    def test_official_post_goes_straight_to_things(self):
+    def test_official_post_is_counted_not_added(self):
         items = by_title(triage([
             msg("Du har modtaget ny post", "noreply@e-boks.dk", "e-Boks"),
             msg("Ny besked fra Lærer", "noreply@aula.dk", "Aula", days=1),
@@ -94,21 +94,38 @@ class TriageTests(unittest.TestCase):
         ], now=T0 + timedelta(days=2)))
         for title, where in [("Du har modtaget ny post", "e-Boks"), ("Ny besked fra Lærer", "Aula"),
                              ("Du har modtaget Digital Post", "Digital Post")]:
-            self.assertEqual((items[title].status, items[title].auto), ("decide", "things"), title)
+            self.assertEqual((items[title].status, items[title].auto, items[title].post), ("decide", "", where), title)
             self.assertTrue(items[title].task.startswith(f"Read in {where}:"))
 
-    def test_old_or_lookalike_official_post_is_not_auto_added(self):
+    def test_old_or_lookalike_official_post_is_not_counted(self):
         items = by_title(triage([
             msg("Ny besked", "noreply@aula.dk", "Aula"),
             msg("Du har ny post i e-Boks", "info@eboks-dk.com", "e-Boks"),
         ], now=T0 + timedelta(days=10)))
-        self.assertEqual((items["Ny besked"].status, items["Ny besked"].auto), ("decide", ""))
+        self.assertEqual((items["Ny besked"].status, items["Ny besked"].post), ("decide", ""))
         self.assertEqual(items["Du har ny post i e-Boks"].status, "scam")
 
     def test_capture_item(self):
         it = capture_item("  Sign the  Aula form for Friday ", T0)
         self.assertEqual((it.title, it.kind, it.auto, it.source), ("Sign the Aula form for Friday", "school", "things", "capture"))
         self.assertNotEqual(it.id, capture_item("Sign the Aula form for Friday", T0 + timedelta(seconds=1)).id)
+
+    def test_capture_places(self):
+        errand = capture("Errand: pick up the frames", T0)
+        self.assertEqual((errand["task"], errand["when"], errand["tags"]), ("Pick up the frames", "anytime", ["Errands"]))
+        house = capture("house - hang pictures in the spare room", T0)
+        self.assertEqual((house["task"], house["when"], house["list"]), ("Hang pictures in the spare room", "anytime",
+                                                                         "Around the house"))
+        self.assertEqual(capture("someday: learn the banjo", T0)["when"], "someday")
+        plain = capture("Ring the dentist", T0)
+        self.assertNotIn("when", plain)
+        self.assertEqual(plain["auto"], "things")
+        sent = capture("Sign trip form", T0, {"when": "today", "tags": ["Family"], "deadline": "2026-10-30",
+                                             "list": "", "bogus": 1})
+        self.assertEqual((sent["when"], sent["tags"], sent["deadline"]), ("today", ["Family"], "2026-10-30"))
+        self.assertNotIn("list", sent)
+        self.assertNotIn("deadline", capture("x", T0, {"deadline": "Friday"}))
+        self.assertEqual(capture("errand:", T0)["task"], "errand:")  # nothing after the place: keep it as typed
 
 
 if __name__ == "__main__":

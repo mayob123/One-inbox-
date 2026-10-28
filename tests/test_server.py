@@ -241,6 +241,56 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(json.loads(raw)["items"], [])
         self.assertEqual([i["id"] for i in self.outbox()], [ITEM["id"]])
 
+    def test_official_post_is_a_mailbox(self):
+        W, C = {"X-OneInbox-Token": "w" * 20}, {"Authorization": "Bearer " + "c" * 20}
+        a1 = dict(ITEM, id="a000000000000001", title="Ny besked", task="Read in Aula: Ny besked", kind="school",
+                  post="Aula", from_addr="noreply@aula.dk", received="2026-10-27T08:00:00+01:00")
+        a2 = dict(a1, id="a000000000000002", title="Ny besked fra Lærer", received="2026-10-27T15:00:00+01:00")
+        e1 = dict(a1, id="e000000000000001", title="Du har ny post", post="e-Boks", kind="admin")
+        rows = [{"id": "CHK", "title": "Check Aula (2 new)", "kind": "school"}]
+        self.web.req(self.base, "POST", "/api/ingest", {"items": [a1, a2, e1], "things": {"left": 1, "today": rows}},
+                     self.agent)
+        self.assertEqual(self.outbox(), [])  # not one to-do per alert
+        t = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers=W)[1])
+        self.assertEqual([(s["source"], s["count"]) for s in t["post"]], [("Aula", 2), ("e-Boks", 1)])
+        self.assertEqual(t["pillars"]["school"]["waiting_mail"], 0)  # counted as post, not as waiting mail
+        waiting = json.loads(self.web.req(self.base, "GET", "/api/waiting", headers=C)[1])["items"]
+        self.assertEqual(waiting, [])
+        self.assertEqual(json.loads(self.web.req(self.base, "GET", "/api/post", headers=self.agent)[1])["sources"][0]["count"], 2)
+        # "Checked them" on the phone clears Aula and ticks the rolling to-do
+        self.assertEqual(self.web.req(self.base, "POST", "/api/post/checked", {"source": "Aula"})[0], 401)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/post/checked", {"source": "Nope"}, C)[0], 400)
+        code, raw = self.web.req(self.base, "POST", "/api/post/checked", {"source": "Aula"}, C)
+        self.assertEqual((code, json.loads(raw)["checked"]), (200, 2))
+        self.assertEqual(json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])["ids"], ["CHK"])
+        t = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers=W)[1])
+        self.assertEqual([s["source"] for s in t["post"]], ["e-Boks"])
+        # Ticking "Check e-Boks" in Things clears what came before it, not what came after
+        e2 = dict(e1, id="e000000000000002", received="2026-10-28T09:00:00+01:00")
+        self.web.req(self.base, "POST", "/api/ingest",
+                     {"items": [e2], "things": {"left": 0, "post_done": {"e-Boks": "2026-10-27T20:00:00+01:00"}}}, self.agent)
+        t = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers=W)[1])
+        self.assertEqual([(s["source"], s["count"], s["items"][0]["id"]) for s in t["post"]], [("e-Boks", 1, e2["id"])])
+        self.assertNotIn("post_done", self.store.get_meta("things_status"))
+
+    def test_side_quests_can_be_ticked(self):
+        W = {"X-OneInbox-Token": "w" * 20}
+        self.ingest(things={"left": 0, "today": [], "pool": [{"id": "J1", "title": "Bulb", "kind": "admin"}],
+                            "week": [{"id": "W1", "title": "Trip form", "kind": "school", "due": "2026-10-30"}]})
+        self.assertEqual(self.web.req(self.base, "POST", "/api/todo/done", {"id": "J1"}, W)[0], 200)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/todo/done", {"id": "W1"}, W)[0], 200)
+        t = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers=W)[1])
+        self.assertEqual((t["pool"], t["week"], t["done"]), ([], [], 2))
+        self.assertEqual(json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])["ids"],
+                         ["J1", "W1"])
+
+    def test_capture_to_anytime(self):
+        code, raw = self.web.req(self.base, "POST", "/api/capture", {"text": "errand: pick up frames"},
+                                 {"Authorization": "Bearer " + "c" * 20})
+        self.assertEqual((code, json.loads(raw)["when"]), (200, "Anytime"))
+        out = self.outbox()[0]
+        self.assertEqual((out["task"], out["when"], out["tags"]), ("Pick up frames", "anytime", ["Errands"]))
+
     def test_pal_round_trip(self):
         W = {"X-OneInbox-Token": "w" * 20}
         body = {"at": 1793000000, "pose": "proud", "focus": None, "line": "ALL PILLARS ON TRACK",

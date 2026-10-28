@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from onebox.feed import build, clean_pal, mood, next_event, pal_compact, short, today
+from onebox.feed import build, clean_pal, mood, next_event, pal_compact, post_summary, short, today
 
 NOON = datetime(2026, 10, 26, 12, 0)
 LATE = datetime(2026, 10, 26, 22, 30)
@@ -43,10 +43,37 @@ class FeedTests(unittest.TestCase):
                             {"title": "x" * 200, "kind": "weird", "due": "2026-10-28"},
                             {"title": "  ", "kind": "other"}]}
         f = today(status, 5, NOON)
-        self.assertEqual({k: v for k, v in f.items() if k not in ("items", "pillars")}, build(status, 5, NOON))
+        self.assertEqual({k: v for k, v in f.items() if k not in ("items", "pillars", "week", "pool", "post")},
+                         build(status, 5, NOON))
+        self.assertEqual((f["week"], f["pool"], f["post"]), ([], [], []))
         self.assertEqual(f["items"][0], {"id": None, "title": "A-kasse hours", "kind": "admin", "due": None})
         self.assertEqual((len(f["items"]), len(f["items"][1]["title"]), f["items"][1]["kind"]), (2, 80, "other"))
         self.assertEqual(today({}, 0, NOON)["items"], [])
+
+    def test_post_summary(self):
+        now = datetime(2026, 10, 28, 8, 0, tzinfo=timezone.utc)
+        def alert(i, src, days, **kw):
+            return {"id": f"p{i}", "status": "decide", "post": src, "title": f"Ny besked {i}", "decision": None,
+                    "received": (now - timedelta(days=days)).isoformat(), **kw}
+        items = [alert(1, "Aula", 2), alert(2, "Aula", 0.5), alert(3, "e-Boks", 1),
+                 alert(4, "Aula", 1, decision="done"), alert(5, "Aula", 20), alert(6, "Aula", 1, status="noise"),
+                 {"id": "m", "status": "decide", "title": "Bill", "received": now.isoformat()}]
+        out = post_summary(items, now)
+        self.assertEqual([(s["source"], s["count"]) for s in out], [("Aula", 2), ("e-Boks", 1)])
+        self.assertEqual((out[0]["since"], out[0]["latest"]), (items[0]["received"], "Ny besked 2"))
+        self.assertEqual([i["id"] for i in out[0]["items"]], ["p1", "p2"])
+
+    def test_small_jobs_and_week_in_today_feed(self):
+        status = {"left": 1, "next": "A", "next_id": "A", "today": [{"id": "A", "title": "A", "kind": "admin"}],
+                  "week": [{"id": "W", "title": "Trip form", "kind": "school", "due": "2026-10-30"}],
+                  "pool": [{"id": "J", "title": "Bulb", "kind": "admin", "project": "Around the house",
+                            "errand": False, "quick": True, "someday": False}]}
+        f = today(status, 0, NOON)
+        self.assertEqual(f["week"], [{"id": "W", "due": "2026-10-30", "title": "Trip form", "kind": "school"}])
+        self.assertEqual(f["pool"][0]["project"], "Around the house")
+        f = today(status, 0, NOON, actions={"done": ["J"], "skip": []})
+        self.assertEqual((f["pool"], f["done"], f["left"]), ([], 1, 1))  # a side quest counts as done today
+        self.assertEqual(f["pillars"]["admin"]["done_week"], 1)
 
     def test_next_event(self):
         cph = timezone(timedelta(hours=1))

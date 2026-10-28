@@ -283,6 +283,12 @@ def tags_col(con) -> str:
 
 TODAY_MAX = 40  # enough for any real Today list, and keeps the phone feed small
 
+# Small, never-urgent jobs the phone offers as side quests: anything in these projects, or with these tags,
+# that sits in Anytime or Someday without a date.
+SMALL_JOB_PROJECTS = ("Around the house",)
+ERRAND_TAGS = {"errands", "errand"}
+QUICK_TAGS = {"5 min", "5min", "quick"}
+
 
 NOTES_MAX = 2000  # a to-do's notes as the phone shows them
 
@@ -337,8 +343,47 @@ def things_status(db_path: str, now: datetime) -> dict:
                WHERE t.type = 0 AND t.status = 0 AND t.trashed = 0
                  AND t.deadline IS NOT NULL AND t.deadline <= ?
                ORDER BY t.deadline""", (week,)).fetchall()
+        not_today = "NOT (t.start = 1 AND t.startDate IS NOT NULL AND t.startDate <= ?)"
+        week_rows = con.execute(
+            f"""SELECT t.uuid, t.title, t.deadline, COALESCE(a.title, pa.title, '') AS area,
+                       COALESCE(p.title, '') AS project, {tags_col(con)}
+               FROM TMTask t
+               LEFT JOIN TMArea a ON a.uuid = t.area
+               LEFT JOIN TMTask p ON p.uuid = t.project
+               LEFT JOIN TMArea pa ON pa.uuid = p.area
+               WHERE t.type = 0 AND t.status = 0 AND t.trashed = 0 AND {not_today}
+                 AND t.deadline IS NOT NULL AND t.deadline <= ?
+               ORDER BY t.deadline""", (t_today, week)).fetchall()
+        pool_rows = con.execute(
+            f"""SELECT t.uuid, t.title, t.start, COALESCE(a.title, pa.title, '') AS area,
+                       COALESCE(p.title, '') AS project, {tags_col(con)}
+               FROM TMTask t
+               LEFT JOIN TMArea a ON a.uuid = t.area
+               LEFT JOIN TMTask p ON p.uuid = t.project
+               LEFT JOIN TMArea pa ON pa.uuid = p.area
+               WHERE t.type = 0 AND t.status = 0 AND t.trashed = 0 AND t.start IN (1, 2) AND t.startDate IS NULL
+               ORDER BY t.start, t.title""").fetchall()
+        checks = con.execute(
+            """SELECT title, stopDate FROM TMTask WHERE type = 0 AND status = 3 AND trashed = 0
+               AND stopDate >= ? AND title LIKE 'Check %'""", (midnight - 3 * 86400,)).fetchall()
     finally:
         con.close()
+    post_done: dict = {}
+    for c in checks:  # "Check Aula (3 new)" ticked in Things: everything that came before it is checked
+        m = POST_TITLE.match(c["title"] or "")
+        if m:
+            at = datetime.fromtimestamp(c["stopDate"], now.tzinfo).isoformat(timespec="seconds")
+            post_done[m.group(1)] = max(post_done.get(m.group(1), at), at)
+    pool = []
+    for r in pool_rows:
+        tags = {t.strip().lower() for t in (r["tags"] or "").split("|")}
+        errand = bool(tags & ERRAND_TAGS)
+        quick = bool(tags & QUICK_TAGS)
+        if not (errand or quick or r["project"].lower() in {p.lower() for p in SMALL_JOB_PROJECTS}):
+            continue
+        pool.append({"id": r["uuid"], "title": r["title"], "project": r["project"] or None,
+                     "kind": kind_of(r["title"], r["area"], r["project"], tags=r["tags"]),
+                     "errand": errand, "quick": quick, "someday": r["start"] == 2})
     bill = None
     for b in bills:
         if kind_of(b["title"], b["area"], tags=b["tags"]) == "bill":
@@ -361,6 +406,10 @@ def things_status(db_path: str, now: datetime) -> dict:
         "next_kind": kind_of(first["title"], first["area"], first["project"], tags=first["tags"]) if first else None,
         "bill": bill,
         "today": today_list,
+        "week": [{"id": r["uuid"], "title": r["title"], "due": from_things_date(r["deadline"]).isoformat(),
+                  "kind": kind_of(r["title"], r["area"], r["project"], tags=r["tags"])} for r in week_rows[:10]],
+        "pool": pool[:30],
+        "post_done": post_done,
     }
 
 
@@ -578,8 +627,13 @@ def things_add_url(items: list[dict]) -> str:
     todos = []
     for it in items:
         attrs = {"title": it["task"], "notes": things_notes(it)}
-        if it.get("auto"):  # e-Boks, Aula and quick captures go to Today, so the watch shows them
+        if it.get("when"):  # a capture said where: "errand: …" goes to Anytime with the Errands tag
+            attrs["when"] = it["when"]
+        elif it.get("auto"):  # homework and quick captures go to Today, so the watch shows them
             attrs["when"] = "today"
+        for key in ("tags", "list", "deadline"):
+            if it.get(key):
+                attrs[key] = it[key]
         todos.append({"type": "to-do", "attributes": attrs})
     return "things:///json?data=" + urllib.parse.quote(json.dumps(todos))
 
@@ -659,6 +713,104 @@ def tag_in_things(cfg: dict, db_path: str, limit: int = 20) -> int | str:
     return len(todo)
 
 
+# --- Official post: one rolling "Check Aula (3 new)" to-do per source ------
+
+POST_TITLE = re.compile(r"^Check (Aula|e-Boks|Digital Post) \(\d+ new\)")
+POST_TAGS = {"Aula": ["Family"], "e-Boks": ["Home admin"], "Digital Post": ["Home admin"]}
+OLD_POST_TODO = re.compile(r"^Read in (Aula|e-Boks|Digital Post): ")
+
+
+def post_notes(src: dict) -> str:
+    lines = [f"Open the {src['source']} app to read them, then tick this off.", ""]
+    for it in reversed(src.get("items", [])):
+        try:
+            when = datetime.fromisoformat(it["received"]).astimezone().strftime("%a %-d %b %H:%M")
+        except (KeyError, ValueError):
+            when = ""
+        lines.append(f"• {when}  {it.get('title') or ''}".rstrip())
+    if src["count"] > len(src.get("items", [])):
+        lines.append(f"…and {src['count'] - len(src['items'])} older")
+    lines += ["", "(added by One Inbox)"]
+    return "\n".join(lines)
+
+
+def open_post_todos(db_path: str) -> dict:
+    """{source: (uuid, title)} for the open "Check …" to-dos One Inbox keeps in Things."""
+    con = ro_connect(db_path)
+    try:
+        rows = con.execute("""SELECT uuid, title FROM TMTask WHERE type = 0 AND status = 0 AND trashed = 0
+                              AND title LIKE 'Check %'""").fetchall()
+    finally:
+        con.close()
+    out = {}
+    for r in rows:
+        m = POST_TITLE.match(r["title"] or "")
+        if m:
+            out.setdefault(m.group(1), (r["uuid"], r["title"]))
+    return out
+
+
+def things_update_url(uuid: str, auth_token: str, **attrs) -> str:
+    return "things:///update?" + urllib.parse.urlencode({"id": uuid, **attrs, "auth-token": auth_token})
+
+
+def post_plan(sources: list[dict], open_todos: dict) -> list[tuple[str, dict]]:
+    """What to do in Things for unread official post: ("add", attrs) for a new Check to-do in Today, or
+    ("update", {"id", "title", "notes"}) when the count changed. One to-do per source, never more."""
+    plan = []
+    for src in sources:
+        if not src.get("count"):
+            continue
+        title = f"Check {src['source']} ({src['count']} new)"
+        current = open_todos.get(src["source"])
+        if current is None:
+            plan.append(("add", {"title": title, "notes": post_notes(src), "when": "today",
+                                 "tags": POST_TAGS.get(src["source"], [])}))
+        elif current[1] != title:
+            plan.append(("update", {"id": current[0], "title": title, "notes": post_notes(src)}))
+    return plan
+
+
+def sync_post(cfg: dict, db_path: str) -> int | str:
+    """Keeps one "Check Aula (3 new)" to-do in Things per source with unread alerts."""
+    try:
+        sources = call(cfg["server"], cfg["token"], "GET", "/api/post").get("sources", [])
+    except urllib.error.HTTPError as e:  # a Pi that hasn't been updated yet
+        return f"Pi has no /api/post yet ({e.code}). Update it with install-pi.sh."
+    plan = post_plan(sources, open_post_todos(db_path))
+    token = cfg.get("things_auth_token", "")
+    adds = [{"type": "to-do", "attributes": a} for op, a in plan if op == "add"]
+    if adds:
+        subprocess.run(["open", "-g", "things:///json?data=" + urllib.parse.quote(json.dumps(adds))], check=True)
+    for op, a in plan:
+        if op == "update" and token:
+            subprocess.run(["open", "-g", things_update_url(a["id"], token, title=a["title"], notes=a["notes"])],
+                           check=True)
+    if any(op == "update" for op, _ in plan) and not token:
+        return f"{len(adds)} added; add things_auth_token to agent.json to update the counts"
+    return len(plan)
+
+
+def tidy_post(cfg: dict, db_path: str) -> int | str:
+    """Cancels the old one-per-email "Read in Aula: …" to-dos that One Inbox added before the rolling
+    Check to-do existed. Only with "post_tidy": true in agent.json; they stay in the Things Logbook."""
+    if not cfg.get("post_tidy"):
+        return 0
+    token = cfg.get("things_auth_token", "")
+    if not token:
+        return "add things_auth_token to agent.json to tidy old post to-dos"
+    con = ro_connect(db_path)
+    try:
+        rows = con.execute(f"""SELECT t.uuid, t.title, {notes_col(con)} AS notes FROM TMTask t
+                               WHERE t.type = 0 AND t.status = 0 AND t.trashed = 0 AND t.title LIKE 'Read in %'""").fetchall()
+    finally:
+        con.close()
+    old = [r["uuid"] for r in rows if OLD_POST_TODO.match(r["title"] or "") and "added by One Inbox" in r["notes"]]
+    for uuid in old:
+        subprocess.run(["open", "-g", things_update_url(uuid, token, canceled="true")], check=True)
+    return len(old)
+
+
 def load_config() -> dict:
     cfg = json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
     cfg.setdefault("server", os.environ.get("ONEBOX_SERVER", "http://inbox.home:8787"))
@@ -705,7 +857,8 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
         status["events"], report["calendar"] = read_calendar(cfg, now)
         report["job_tracker"] = read_job_tracker(cfg, status, now)
         payload["things"] = status
-        report["things"] = {k: v for k, v in status.items() if k != "completed_ids"}
+        report["things"] = {k: v for k, v in status.items() if k not in ("completed_ids", "pool", "week")}
+        report["small_jobs"], report["this_week"] = len(status["pool"]), len(status["week"])
     if dry_run:
         report["would_send"] = len(items)
         if cfg.get("calendars") or cfg.get("deadlines"):
@@ -720,6 +873,8 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
     report["completed_in_things"] = complete_in_things(cfg)
     report["calendar"] = sync_calendars(cfg, now)
     if things_db:
+        report["post_in_things"] = sync_post(cfg, things_db)
+        report["post_tidied"] = tidy_post(cfg, things_db)
         report["tagged_in_things"] = tag_in_things(cfg, things_db)
     return report
 

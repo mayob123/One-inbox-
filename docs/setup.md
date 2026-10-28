@@ -126,7 +126,11 @@ One Inbox never logs in to these (they need MitID). It works from their alert em
 - **e-Boks** and **mit.dk / Digital Post**: in each app's settings, under notifications, turn on email notification for new post, to an address the Mac's Mail reads.
 - **Aula**: Profile → Settings → Notifications, turn on email for messages, and for events and posts if you want those too.
 
-A new alert from `e-boks.dk`, `mit.dk`, `digitalpost.dk`, `borger.dk` or `aula.dk` skips the yes/no step: it becomes a Things to-do for Today ("Read in Aula: …") and stays on the watch until you tick it. Lookalike senders are still flagged as scams, and alerts older than a week stay on the page instead, so the first sync doesn't flood Things.
+A new alert from `e-boks.dk`, `mit.dk`, `digitalpost.dk`, `borger.dk` or `aula.dk` skips the yes/no step. It is not a to-do of its own, because the email only says something is waiting. Instead Pocket Pal counts unread alerts per source ("Aula 3 · since Mon"), and the Mac keeps **one** to-do per source in Things Today, "Check Aula (3 new)", with every alert listed in its notes. A new alert updates that to-do's count (needs `things_auth_token`). Tick it in Things, or tap **Checked them** in Pocket Pal, and the count goes back to zero. Lookalike senders are still flagged as scams, and alerts older than a week aren't counted, so the first sync doesn't flood Things.
+
+The old one-per-email "Read in Aula: …" to-dos can be cleared in one go: add `"post_tidy": true` to `agent.json`. The Mac then cancels them in Things (they stay in the Logbook) on its next sync.
+
+Quick captures can skip Today: start them with `errand:` (Anytime, tag Errands), `house:` (the Around the house project) or `someday:`. The phone can also send `when`, `tags`, `list` and `deadline` with `/api/capture`.
 
 ## 8. Calendar on the watch
 
