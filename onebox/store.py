@@ -141,6 +141,37 @@ class Store:
         with self.lock:
             return [r["sender"] for r in self.db.execute("SELECT sender FROM quiet ORDER BY at DESC")]
 
+    # --- official post: alerts are counted, then checked in one go ---------
+
+    def check_post(self, source: str, before: str | None = None) -> int:
+        """Mark unread alerts from `source` (Aula, e-Boks, Digital Post) as checked, all of them or those
+        received up to `before` (an ISO time: when Ben ticked "Check Aula" in Things). Returns how many."""
+        cut = None
+        if before:
+            try:
+                cut = datetime.fromisoformat(before)
+            except ValueError:
+                return 0
+        ts = now_iso()
+        with self.lock:
+            n = 0
+            for r in self.db.execute("SELECT id, data FROM items WHERE decision IS NULL AND status='decide'").fetchall():
+                d = json.loads(r["data"])
+                if d.get("post") != source:
+                    continue
+                if cut is not None:
+                    try:
+                        received = datetime.fromisoformat(d["received"])
+                        if received.tzinfo is None or cut.tzinfo is None:  # compare like with like
+                            received, cut = received.replace(tzinfo=None), cut.replace(tzinfo=None)
+                        if received > cut:
+                            continue
+                    except (KeyError, ValueError):
+                        continue
+                n += self.db.execute("UPDATE items SET decision='done', decided_at=? WHERE id=?", (ts, r["id"])).rowcount
+            self.db.commit()
+        return n
+
     # --- outbox to Things (the Mac agent drains it) -----------------------
 
     def outbox(self) -> list[dict]:

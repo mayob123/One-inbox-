@@ -116,15 +116,17 @@ AREA_RULES = [
     (r"tandl|doctor|læge|dentist", "Admin & bills", "admin"),
 ]
 
-# Danish official post. Their alert emails go straight to Things for today, so they sit on
-# the watch until ticked off. Matched on the real sender domain only, so lookalikes don't count.
+# Danish official post. An alert email only says "something new is waiting", so it is not a to-do
+# of its own: unread alerts are counted per source on the phone, and the Mac keeps one rolling
+# "Check Aula (3 new)" to-do in Things Today (agent.sync_post). Matched on the real sender domain
+# only, so lookalikes don't count.
 OFFICIAL_POST = {
     "e-Boks": ("e-boks.dk", "e-boks.com"),
     "Digital Post": ("mit.dk", "digitalpost.dk", "borger.dk"),
     "Aula": ("aula.dk",),
 }
-AUTO_ADD_DAYS = 7  # older alerts stay on the page, so a first sync doesn't flood Things
-# Homework from the Danish teacher goes straight to Things for today, like official post.
+AUTO_ADD_DAYS = 7  # older alerts and homework stay on the page, so a first sync doesn't flood Things
+# Homework from the Danish teacher goes straight to Things for today.
 HOMEWORK = re.compile(r"lektie|homework|hjemmearbejde|opgave", re.I)
 
 SUBJECT_PREFIX = re.compile(r"^\s*((re|fwd?|fw|sv|vs|aw|vb|accepted|declined|opdateret invitation)\s*:\s*)+", re.I)
@@ -169,6 +171,7 @@ class Item:
     lang: str = "en"
     evidence: list = field(default_factory=list)
     auto: str = ""  # "things": the Pi queues it for Things as soon as it first sees it
+    post: str = ""  # "Aula", "e-Boks" or "Digital Post": an official post alert, counted rather than added
     from_addr: str = ""  # sender's address, used to remember "no action needed"
     ref: str = ""  # the message in Mail (account:rowid), so the Mac can read its body for details
 
@@ -336,8 +339,8 @@ def triage(messages: list[Message], now: datetime | None = None) -> list[Item]:
                 continue
             fresh = now - msg.received <= timedelta(days=AUTO_ADD_DAYS)
             base["task"] = _cut(f"Read in {post}: {base['title']}")
-            why = f"New in {post}. " + ("Added to Things for today." if fresh else "Older than a week, so not added.")
-            items.append(Item(status="decide", why=why, auto="things" if fresh else "", **base))
+            why = f"New in {post}. " + (f"Counted in today's Check {post} to-do." if fresh else "Older than a week, so not counted.")
+            items.append(Item(status="decide", why=why, post=post if fresh else "", **base))
             continue
         if kind == "danish" and HOMEWORK.search(msg.subject):
             fresh = now - msg.received <= timedelta(days=AUTO_ADD_DAYS)
@@ -379,6 +382,16 @@ def triage(messages: list[Message], now: datetime | None = None) -> list[Item]:
     return items
 
 
+# Spoken or typed prefixes that send a capture somewhere other than Today: "errand: pick up frames".
+CAPTURE_PLACES = {
+    "errand": {"when": "anytime", "tags": ["Errands"]},
+    "house": {"when": "anytime", "list": "Around the house"},
+    "someday": {"when": "someday"},
+}
+CAPTURE_PREFIX = re.compile(r"^\s*(" + "|".join(CAPTURE_PLACES) + r")s?\s*[:,-]\s*", re.I)
+WHENS = {"today", "anytime", "someday"}
+
+
 def capture_item(text: str, now: datetime) -> Item:
     """A to-do Ben typed or dictated himself. It goes to Things for today."""
     text = re.sub(r"\s+", " ", text).strip()
@@ -388,6 +401,28 @@ def capture_item(text: str, now: datetime) -> Item:
     return Item(id=item_id(msg), status="decide", title=text, task=_cut(text, 200), area=area, kind=kind,
                 source="capture", sender="You", received=now.isoformat(timespec="seconds"),
                 why="You added this.", lang=language(msg), auto="things")
+
+
+def capture(text: str, now: datetime, place: dict | None = None) -> dict:
+    """capture_item, sent somewhere other than Today when the text starts with a place ("errand: …",
+    "house: …", "someday: …") or the phone says where (`place`: when, tags, list, deadline)."""
+    text = re.sub(r"\s+", " ", text).strip()
+    where = {k: v for k, v in (place or {}).items() if v not in (None, "", [])}
+    m = CAPTURE_PREFIX.match(text)
+    if m and text[m.end():].strip():
+        where = {**CAPTURE_PLACES[m.group(1).lower()], **where}
+        text = text[m.end():].strip()
+        text = text[0].upper() + text[1:]
+    d = capture_item(text, now).to_dict()
+    if where.get("when") in WHENS:
+        d["when"] = where["when"]
+    if isinstance(where.get("tags"), list):
+        d["tags"] = [str(t).strip()[:40] for t in where["tags"] if str(t).strip()][:5]
+    if isinstance(where.get("list"), str) and where["list"].strip():
+        d["list"] = where["list"].strip()[:80]
+    if isinstance(where.get("deadline"), str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", where["deadline"]):
+        d["deadline"] = where["deadline"]
+    return d
 
 
 def summary(items: list[Item]) -> dict:
