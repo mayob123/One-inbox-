@@ -365,7 +365,7 @@ def things_status(db_path: str, now: datetime) -> dict:
                ORDER BY t.start, t.title""").fetchall()
         checks = con.execute(
             """SELECT title, stopDate FROM TMTask WHERE type = 0 AND status = 3 AND trashed = 0
-               AND stopDate >= ? AND title LIKE 'Check %'""", (midnight - 3 * 86400,)).fetchall()
+               AND stopDate >= ? AND title LIKE 'Check%'""", (midnight - 3 * 86400,)).fetchall()
     finally:
         con.close()
     post_done: dict = {}
@@ -373,10 +373,11 @@ def things_status(db_path: str, now: datetime) -> dict:
         m = POST_TITLE.match(c["title"] or "")
         if m:
             at = datetime.fromtimestamp(c["stopDate"], now.tzinfo).isoformat(timespec="seconds")
-            post_done[m.group(1)] = max(post_done.get(m.group(1), at), at)
+            src = m.group(1).replace("+", " ")
+            post_done[src] = max(post_done.get(src, at), at)
     pool = []
     for r in pool_rows:
-        tags = {t.strip().lower() for t in (r["tags"] or "").split("|")}
+        tags = {t.strip().rstrip(".").lower() for t in (r["tags"] or "").split("|")}  # "5 min." counts too
         errand = bool(tags & ERRAND_TAGS)
         quick = bool(tags & QUICK_TAGS)
         if not (errand or quick or r["project"].lower() in {p.lower() for p in SMALL_JOB_PROJECTS}):
@@ -638,9 +639,14 @@ def things_add_url(items: list[dict]) -> str:
     return "things:///json?data=" + urllib.parse.quote(json.dumps(todos))
 
 
+def things_query(params: dict) -> str:
+    """Things reads "+" literally, so spaces must go as %20: "Check Aula (2 new)", not "Check+Aula+(2+new)"."""
+    return urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
+
+
 def things_done_url(uuid: str, auth_token: str) -> str:
     """Things needs its own auth token (Settings > General > Enable Things URLs) to change a to-do."""
-    return "things:///update?" + urllib.parse.urlencode({"id": uuid, "completed": "true", "auth-token": auth_token})
+    return "things:///update?" + things_query({"id": uuid, "completed": "true", "auth-token": auth_token})
 
 
 def complete_in_things(cfg: dict, dry_run: bool = False) -> int | str:
@@ -689,7 +695,7 @@ def untagged_guesses(db_path: str) -> list[tuple[str, str]]:
 
 
 def things_tag_url(uuid: str, tag: str, auth_token: str) -> str:
-    return "things:///update?" + urllib.parse.urlencode({"id": uuid, "add-tags": tag, "auth-token": auth_token})
+    return "things:///update?" + things_query({"id": uuid, "add-tags": tag, "auth-token": auth_token})
 
 
 def tag_in_things(cfg: dict, db_path: str, limit: int = 20) -> int | str:
@@ -715,7 +721,7 @@ def tag_in_things(cfg: dict, db_path: str, limit: int = 20) -> int | str:
 
 # --- Official post: one rolling "Check Aula (3 new)" to-do per source ------
 
-POST_TITLE = re.compile(r"^Check (Aula|e-Boks|Digital Post) \(\d+ new\)")
+POST_TITLE = re.compile(r"^Check[ +](Aula|e-Boks|Digital[ +]Post)[ +]\(\d+[ +]new\)")  # "+": older broken updates
 POST_TAGS = {"Aula": ["Family"], "e-Boks": ["Home admin"], "Digital Post": ["Home admin"]}
 OLD_POST_TODO = re.compile(r"^Read in (Aula|e-Boks|Digital Post): ")
 
@@ -735,34 +741,39 @@ def post_notes(src: dict) -> str:
 
 
 def open_post_todos(db_path: str) -> dict:
-    """{source: (uuid, title)} for the open "Check …" to-dos One Inbox keeps in Things."""
+    """{source: [(uuid, title), ...]} for the open "Check …" to-dos One Inbox keeps in Things. There should be
+    one per source; more are left over from a bug and get cancelled."""
     con = ro_connect(db_path)
     try:
         rows = con.execute("""SELECT uuid, title FROM TMTask WHERE type = 0 AND status = 0 AND trashed = 0
-                              AND title LIKE 'Check %'""").fetchall()
+                              AND title LIKE 'Check%'""").fetchall()
     finally:
         con.close()
-    out = {}
+    out: dict = {}
     for r in rows:
         m = POST_TITLE.match(r["title"] or "")
         if m:
-            out.setdefault(m.group(1), (r["uuid"], r["title"]))
+            out.setdefault(m.group(1).replace("+", " "), []).append((r["uuid"], r["title"]))
     return out
 
 
 def things_update_url(uuid: str, auth_token: str, **attrs) -> str:
-    return "things:///update?" + urllib.parse.urlencode({"id": uuid, **attrs, "auth-token": auth_token})
+    return "things:///update?" + things_query({"id": uuid, **attrs, "auth-token": auth_token})
 
 
 def post_plan(sources: list[dict], open_todos: dict) -> list[tuple[str, dict]]:
     """What to do in Things for unread official post: ("add", attrs) for a new Check to-do in Today, or
-    ("update", {"id", "title", "notes"}) when the count changed. One to-do per source, never more."""
+    ("update", {"id", "title", "notes"}) when the count changed, and ("cancel", {"id"}) for any extra Check
+    to-do of the same source. One to-do per source, never more."""
     plan = []
+    for todos in open_todos.values():
+        plan += [("cancel", {"id": uuid}) for uuid, _ in todos[1:]]
     for src in sources:
         if not src.get("count"):
             continue
         title = f"Check {src['source']} ({src['count']} new)"
-        current = open_todos.get(src["source"])
+        found = open_todos.get(src["source"]) or []
+        current = found[0] if found else None
         if current is None:
             plan.append(("add", {"title": title, "notes": post_notes(src), "when": "today",
                                  "tags": POST_TAGS.get(src["source"], [])}))
@@ -786,7 +797,9 @@ def sync_post(cfg: dict, db_path: str) -> int | str:
         if op == "update" and token:
             subprocess.run(["open", "-g", things_update_url(a["id"], token, title=a["title"], notes=a["notes"])],
                            check=True)
-    if any(op == "update" for op, _ in plan) and not token:
+        elif op == "cancel" and token:
+            subprocess.run(["open", "-g", things_update_url(a["id"], token, canceled="true")], check=True)
+    if any(op != "add" for op, _ in plan) and not token:
         return f"{len(adds)} added; add things_auth_token to agent.json to update the counts"
     return len(plan)
 

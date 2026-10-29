@@ -288,9 +288,19 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(len(bullets), 2)
         self.assertTrue(bullets[0].endswith("Ny besked fra Lærer"))  # newest first
         # already there with the same count: nothing to do; a new alert: update the one to-do
-        self.assertEqual(agent.post_plan([aula], {"Aula": ("U1", "Check Aula (2 new)")}), [])
-        plan = agent.post_plan([dict(aula, count=3)], {"Aula": ("U1", "Check Aula (2 new)")})
+        self.assertEqual(agent.post_plan([aula], {"Aula": [("U1", "Check Aula (2 new)")]}), [])
+        plan = agent.post_plan([dict(aula, count=3)], {"Aula": [("U1", "Check Aula (2 new)")]})
         self.assertEqual([(op, a["id"], a["title"]) for op, a in plan], [("update", "U1", "Check Aula (3 new)")])
+        # A title broken by an earlier "+" update is repaired, and extra Check to-dos are cancelled
+        plan = agent.post_plan([aula], {"Aula": [("U1", "Check+Aula+(16+new)"), ("U2", "Check Aula (5 new)")]})
+        self.assertEqual([(op, a["id"]) for op, a in plan], [("cancel", "U2"), ("update", "U1")])
+        self.assertEqual(plan[1][1]["title"], "Check Aula (2 new)")
+
+    def test_things_urls_keep_spaces(self):
+        url = agent.things_update_url("U1", "tok", title="Check Aula (2 new)")
+        self.assertIn("title=Check%20Aula%20%282%20new%29", url)
+        self.assertNotIn("+", url)
+        self.assertIn("add-tags=Home%20admin", agent.things_tag_url("U1", "Home admin", "tok"))
 
     def test_post_todos_in_things(self):
         with tempfile.TemporaryDirectory() as d:
@@ -302,10 +312,14 @@ class AgentTests(unittest.TestCase):
                 ("p1", "Check Aula (3 new)", 0, 0, 0, 1, agent.things_date(NOW.date()), 3, None, None, None, None),
                 ("p2", "Check e-Boks (1 new)", 0, 3, 0, 1, agent.things_date(NOW.date()), 0, stop, None, None, None),
                 ("p3", "Check the tyres", 0, 0, 0, 1, None, 0, None, None, None, None),
+                ("p4", "Check+Aula+(16+new)", 0, 0, 0, 1, None, 0, None, None, None, None),
+                ("p5", "Check+Digital+Post+(1+new)", 0, 0, 0, 1, None, 0, None, None, None, None),
             ])
             con.commit()
             con.close()
-            self.assertEqual(agent.open_post_todos(path), {"Aula": ("p1", "Check Aula (3 new)")})
+            found = agent.open_post_todos(path)
+            self.assertEqual(sorted(found), ["Aula", "Digital Post"])
+            self.assertEqual(sorted(u for u, _ in found["Aula"]), ["p1", "p4"])
             s = agent.things_status(path, NOW)
             self.assertEqual(list(s["post_done"]), ["e-Boks"])
             self.assertEqual(datetime.fromisoformat(s["post_done"]["e-Boks"]).timestamp(), int(stop))
