@@ -252,6 +252,11 @@ class AgentTests(unittest.TestCase):
         self.assertTrue(url.startswith("things:///update?"))
         self.assertEqual((q["id"], q["completed"], q["auth-token"]), (["ABC123"], ["true"], ["tok&en"]))
 
+    def test_things_update_url_spaces_are_not_plus(self):
+        url = agent.things_update_url("ABC123", "tok", title="Check Aula (3 new)")
+        self.assertIn("title=Check%20Aula%20%283%20new%29", url)
+        self.assertNotIn("+", url)
+
     def test_things_url_is_valid_json(self):
         url = agent.things_add_url([{"task": "Pay & check", "title": "Bill", "sender": "V", "received": "2026-10-22T00:00:00",
                                      "why": "", "area": "Admin"}])

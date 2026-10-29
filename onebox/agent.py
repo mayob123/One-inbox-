@@ -370,7 +370,7 @@ def things_status(db_path: str, now: datetime) -> dict:
         con.close()
     post_done: dict = {}
     for c in checks:  # "Check Aula (3 new)" ticked in Things: everything that came before it is checked
-        m = POST_TITLE.match(c["title"] or "")
+        m = POST_TITLE.match((c["title"] or "").replace("+", " "))
         if m:
             at = datetime.fromtimestamp(c["stopDate"], now.tzinfo).isoformat(timespec="seconds")
             post_done[m.group(1)] = max(post_done.get(m.group(1), at), at)
@@ -640,7 +640,7 @@ def things_add_url(items: list[dict]) -> str:
 
 def things_done_url(uuid: str, auth_token: str) -> str:
     """Things needs its own auth token (Settings > General > Enable Things URLs) to change a to-do."""
-    return "things:///update?" + urllib.parse.urlencode({"id": uuid, "completed": "true", "auth-token": auth_token})
+    return things_update_url(uuid, auth_token, completed="true")
 
 
 def complete_in_things(cfg: dict, dry_run: bool = False) -> int | str:
@@ -689,7 +689,7 @@ def untagged_guesses(db_path: str) -> list[tuple[str, str]]:
 
 
 def things_tag_url(uuid: str, tag: str, auth_token: str) -> str:
-    return "things:///update?" + urllib.parse.urlencode({"id": uuid, "add-tags": tag, "auth-token": auth_token})
+    return things_update_url(uuid, auth_token, **{"add-tags": tag})
 
 
 def tag_in_things(cfg: dict, db_path: str, limit: int = 20) -> int | str:
@@ -744,14 +744,16 @@ def open_post_todos(db_path: str) -> dict:
         con.close()
     out = {}
     for r in rows:
-        m = POST_TITLE.match(r["title"] or "")
+        m = POST_TITLE.match((r["title"] or "").replace("+", " "))
         if m:
             out.setdefault(m.group(1), (r["uuid"], r["title"]))
     return out
 
 
 def things_update_url(uuid: str, auth_token: str, **attrs) -> str:
-    return "things:///update?" + urllib.parse.urlencode({"id": uuid, **attrs, "auth-token": auth_token})
+    # %20, not "+": Things keeps a "+" as a literal plus, so "Check Aula" became "Check+Aula" and was never found again
+    return "things:///update?" + urllib.parse.urlencode({"id": uuid, **attrs, "auth-token": auth_token},
+                                                       quote_via=urllib.parse.quote)
 
 
 def post_plan(sources: list[dict], open_todos: dict) -> list[tuple[str, dict]]:
