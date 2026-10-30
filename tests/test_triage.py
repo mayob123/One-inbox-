@@ -215,3 +215,43 @@ class FilterTests(unittest.TestCase):
 
     def test_job_ads_are_folded(self):
         self.assertEqual(self.status("Ben, looking for a new job?", "jobs@linkedin.com", "LinkedIn"), "noise")
+
+
+class ScheduleFromTextTests(unittest.TestCase):
+    NOW = datetime(2026, 10, 30, 11, 0, tzinfo=timezone.utc)  # a Friday
+
+    def s(self, text):
+        from onebox.triage import schedule_from_text
+        return schedule_from_text(text, self.NOW)
+
+    def test_named_day_goes_to_that_day(self):
+        self.assertEqual(self.s("Dentist on Monday"), {"when": "2026-11-02"})
+        self.assertEqual(self.s("Dentist on Monday at 9"), {"when": "2026-11-02@09:00"})
+        self.assertEqual(self.s("Call the bank tomorrow at 2:30pm"), {"when": "2026-10-31@14:30"})
+        self.assertEqual(self.s("Ring Tom kl. 14 på tirsdag"), {"when": "2026-11-03@14:00"})
+        self.assertEqual(self.s("Parents evening 12 Nov"), {"when": "2026-11-12"})
+        self.assertEqual(self.s("Flights Jan 5"), {"when": "2027-01-05"})
+        self.assertEqual(self.s("Pick up parcel 3/11"), {"when": "2026-11-03"})
+        self.assertEqual(self.s("Start module 2026-11-02"), {"when": "2026-11-02"})
+
+    def test_today_and_next(self):
+        self.assertEqual(self.s("Gym friday"), {})  # today, no time: plain Today
+        self.assertEqual(self.s("Gym friday at 18"), {"when": "2026-10-30@18:00"})
+        self.assertEqual(self.s("Gym next friday"), {"when": "2026-11-06"})
+        self.assertEqual(self.s("Call mum at 6pm"), {"when": "2026-10-30@18:00"})
+
+    def test_by_a_day_is_a_deadline(self):
+        self.assertEqual(self.s("Sign the Aula form for Friday"), {"deadline": "2026-10-30"})  # due today
+        self.assertEqual(self.s("Send the form by Monday"), {"deadline": "2026-11-02"})
+        self.assertEqual(self.s("Essay due 14 Dec"), {"deadline": "2026-12-14"})
+
+    def test_no_day(self):
+        self.assertEqual(self.s("Buy milk"), {})
+        self.assertEqual(self.s("Monthly budget review"), {})
+        self.assertEqual(self.s("Book a monitor stand"), {})
+
+    def test_capture_uses_it_unless_told_where(self):
+        self.assertEqual(capture("Dentist on Monday at 9", self.NOW)["when"], "2026-11-02@09:00")
+        self.assertEqual(capture("errand: pick up frames on Monday", self.NOW)["when"], "anytime")
+        self.assertEqual(capture("Dentist on Monday", self.NOW, {"when": "2026-11-04"})["when"], "2026-11-04")
+        self.assertNotIn("when", capture("Buy milk", self.NOW))

@@ -414,7 +414,117 @@ CAPTURE_PLACES = {
     "someday": {"when": "someday"},
 }
 CAPTURE_PREFIX = re.compile(r"^\s*(" + "|".join(CAPTURE_PLACES) + r")s?\s*[:,-]\s*", re.I)
-WHENS = {"today", "anytime", "someday"}
+WHENS = {"today", "tomorrow", "evening", "anytime", "someday"}
+THINGS_DATE = re.compile(r"\d{4}-\d{2}-\d{2}(@\d{1,2}:\d{2})?")
+
+# --- "on Monday", "tomorrow at 9", "2 Nov": the day a capture is for -------------
+
+WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
+            "mandag": 0, "tirsdag": 1, "onsdag": 2, "torsdag": 3, "fredag": 4, "lørdag": 5, "søndag": 6}
+MONTHS = {m: i + 1 for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"])}
+MONTHS.update({"maj": 5, "okt": 10})
+_DAY_WORD = (r"monday|tuesday|tues|wednesday|thursday|thurs|friday|saturday|sunday|"
+             r"mandag|tirsdag|onsdag|torsdag|fredag|lørdag|søndag")
+_MONTH_WORD = r"(?:jan|feb|mar|apr|maj|may|jun|jul|aug|sep|okt|oct|nov|dec)[a-z]*\.?"
+DATE_PATTERNS = [
+    ("iso", re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")),
+    ("tomorrow", re.compile(r"\b(tomorrow|tmrw|i ?morgen)\b", re.I)),
+    ("weekday", re.compile(r"\b(next |this |on |på )?(" + _DAY_WORD + r")\b", re.I)),
+    ("day_month", re.compile(r"\b(\d{1,2})(?:st|nd|rd|th|\.)? (" + _MONTH_WORD + r")(?![a-z])", re.I)),
+    ("month_day", re.compile(r"\b(" + _MONTH_WORD + r") (\d{1,2})(?:st|nd|rd|th)?\b", re.I)),
+    ("dmy", re.compile(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b")),  # Danish/UK order: 3/11
+]
+TIME_PATTERN = re.compile(
+    r"\b(?:at |kl\.? ?|@ ?)(\d{1,2})(?:[:.](\d{2}))? ?(am|pm)?\b|\b(\d{1,2})(?:[:.](\d{2}))? ?(am|pm)\b", re.I)
+
+
+def _future(d, today):
+    """A day-and-month with no year means the next time it comes round."""
+    return d if d >= today else d.replace(year=d.year + 1)
+
+
+DEADLINE_WORDS = re.compile(r"\b(by|for|before|due|until|till|senest|inden)\s*$", re.I)
+
+
+def day_from_text(text: str, now: datetime, with_start: bool = False):
+    """The date a to-do mentions ("on Monday", "tomorrow", "2 Nov", "3/11", "2026-11-02"), or None.
+    Today's own weekday means today; "next Monday" always means a week or more ahead.
+    with_start=True also returns where in the text the date was found."""
+    hit = _day_and_start(text, now)
+    if with_start:
+        return hit
+    return hit[0] if hit else None
+
+
+def _day_and_start(text: str, now: datetime):
+    from datetime import date
+    today = now.date()
+    for kind, rx in DATE_PATTERNS:
+        m = rx.search(text)
+        if not m:
+            continue
+        try:
+            if kind == "iso":
+                return date(int(m[1]), int(m[2]), int(m[3])), m.start()
+            if kind == "tomorrow":
+                return today + timedelta(days=1), m.start()
+            if kind == "weekday":
+                word = m[2].lower()
+                wd = WEEKDAYS.get(word, WEEKDAYS.get(word[:3]))
+                if wd is None:
+                    continue
+                ahead = (wd - today.weekday()) % 7
+                if (m[1] or "").strip().lower() == "next" and ahead == 0:
+                    ahead = 7
+                return today + timedelta(days=ahead), m.start()
+            if kind in ("day_month", "month_day"):
+                day, mon = (m[1], m[2]) if kind == "day_month" else (m[2], m[1])
+                return _future(date(today.year, MONTHS[mon.lower().rstrip(".")[:3]], int(day)), today), m.start()
+            if kind == "dmy":
+                year = int(m[3]) + (2000 if m[3] and len(m[3]) == 2 else 0) if m[3] else today.year
+                d = date(year, int(m[2]), int(m[1]))
+                return (d if m[3] else _future(d, today)), m.start()
+        except (ValueError, KeyError):
+            continue
+    return None
+
+
+def time_from_text(text: str):
+    """"at 9", "kl. 14", "2:30pm", "14:00" → "09:00" style, or None."""
+    m = TIME_PATTERN.search(text)
+    if not m:
+        return None
+    hour, minute, ampm = (m[1], m[2], m[3]) if m[1] else (m[4], m[5], m[6])
+    h, mi = int(hour), int(minute or 0)
+    if ampm:
+        h = h % 12 + (12 if ampm.lower() == "pm" else 0)
+    elif 1 <= h < 7 and not minute:  # "at 3" is the afternoon, not 3 in the morning
+        h += 12
+    return f"{h:02d}:{mi:02d}" if h < 24 and mi < 60 else None
+
+
+def schedule_from_text(text: str, now: datetime) -> dict:
+    """Where a to-do that names its day belongs in Things.
+
+    "Dentist on Monday at 9" → {"when": "2026-11-02@09:00"} (on that day, with a reminder).
+    "Send the form by Friday" → {"deadline": "2026-11-06"} (a due date; it stays in Today to start on).
+    Nothing named, or today with no time → {} (it goes to Today as before)."""
+    hit = day_from_text(text, now, with_start=True)
+    if not hit:
+        at = time_from_text(text)  # "call mum at 6pm": today, with a reminder
+        if at and at > now.strftime("%H:%M"):
+            return {"when": f"{now.date().isoformat()}@{at}"}
+        return {}
+    if hit[0] < now.date():
+        return {}
+    day, start = hit
+    if DEADLINE_WORDS.search(text[:start]):
+        return {"deadline": day.isoformat()}
+    at = time_from_text(text)
+    if day == now.date() and not at:
+        return {}
+    return {"when": day.isoformat() + (f"@{at}" if at else "")}
 
 
 def capture_item(text: str, now: datetime) -> Item:
@@ -430,7 +540,8 @@ def capture_item(text: str, now: datetime) -> Item:
 
 def capture(text: str, now: datetime, place: dict | None = None) -> dict:
     """capture_item, sent somewhere other than Today when the text starts with a place ("errand: …",
-    "house: …", "someday: …") or the phone says where (`place`: when, tags, list, deadline)."""
+    "house: …", "someday: …"), the phone says where (`place`: when, tags, list, deadline), or the text
+    names a day ("on Monday", "tomorrow at 9", "2 Nov")."""
     text = re.sub(r"\s+", " ", text).strip()
     where = {k: v for k, v in (place or {}).items() if v not in (None, "", [])}
     m = CAPTURE_PREFIX.match(text)
@@ -439,8 +550,11 @@ def capture(text: str, now: datetime, place: dict | None = None) -> dict:
         text = text[m.end():].strip()
         text = text[0].upper() + text[1:]
     d = capture_item(text, now).to_dict()
-    if where.get("when") in WHENS:
-        d["when"] = where["when"]
+    when = where.get("when")
+    if isinstance(when, str) and (when in WHENS or THINGS_DATE.fullmatch(when)):
+        d["when"] = when
+    elif not when:  # "Dentist on Monday at 9" goes to Monday with a reminder; "form by Friday" gets a deadline
+        d.update(schedule_from_text(text, now))
     if isinstance(where.get("tags"), list):
         d["tags"] = [str(t).strip()[:40] for t in where["tags"] if str(t).strip()][:5]
     if isinstance(where.get("list"), str) and where["list"].strip():
@@ -448,6 +562,20 @@ def capture(text: str, now: datetime, place: dict | None = None) -> dict:
     if isinstance(where.get("deadline"), str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", where["deadline"]):
         d["deadline"] = where["deadline"]
     return d
+
+
+def when_label(when: str | None) -> str:
+    """Where a to-do lands in Things, for the phone: "Today", "Anytime", or "Mon 2 Nov at 09:00"."""
+    if not when or when == "today":
+        return "Today"
+    if when in WHENS:
+        return when.capitalize()
+    day, _, at = when.partition("@")
+    try:
+        label = datetime.strptime(day, "%Y-%m-%d").strftime("%a %-d %b")
+    except ValueError:
+        return "Today"
+    return label + (f" at {at}" if at else "")
 
 
 def summary(items: list[Item]) -> dict:

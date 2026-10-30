@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 from . import feed
 from .pihole import PiHole
 from .store import Store
-from .triage import POST_SOURCES, capture
+from .triage import POST_SOURCES, capture, when_label
 
 WEB_DIR = Path(__file__).parent / "web"
 COOKIE = "onebox_key"
@@ -205,9 +205,9 @@ def make_handler(cfg: Config, store: Store):
                         return self._json(400, {"error": f"Send 1 to {MAX_CAPTURE} characters of text."})
                     item = capture(text, self._now(), {k: body.get(k) for k in ("when", "tags", "list", "deadline")})
                     store.upsert_items([item])
-                    where = {"anytime": "Anytime", "someday": "Someday"}.get(item.get("when"), "Today")
+                    where = when_label(item.get("when"))
                     return self._json(200, {"ok": True, "id": item["id"], "task": item["task"], "when": where,
-                                            "message": f"Got it. It goes to Things {where} on your next Mac sync."})
+                                            "message": f"Got it. It goes to Things {where if where in ('Today', 'Anytime', 'Someday', 'Tomorrow', 'Evening') else 'for ' + where} on your next Mac sync."})
                 if path == "/api/quiet/remove":
                     if not self._ui_ok():
                         return self._send(401)
