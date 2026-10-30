@@ -291,6 +291,14 @@ class ServerTests(unittest.TestCase):
         out = self.outbox()[0]
         self.assertEqual((out["task"], out["when"], out["tags"]), ("Pick up frames", "anytime", ["Errands"]))
 
+    def test_capture_on_a_named_day(self):
+        code, raw = self.web.req(self.base, "POST", "/api/capture", {"text": "Dentist on 2026-11-02 at 9"},
+                                 {"Authorization": "Bearer " + "c" * 20})
+        body = json.loads(raw)
+        self.assertEqual((code, body["when"]), (200, "Mon 2 Nov at 09:00"))
+        self.assertIn("for Mon 2 Nov at 09:00", body["message"])
+        self.assertEqual(self.outbox()[0]["when"], "2026-11-02@09:00")
+
     def test_pal_round_trip(self):
         W = {"X-OneInbox-Token": "w" * 20}
         body = {"at": 1793000000, "pose": "proud", "focus": None, "line": "ALL PILLARS ON TRACK",
