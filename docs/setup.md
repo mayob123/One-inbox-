@@ -128,6 +128,10 @@ One Inbox never logs in to these (they need MitID). It works from their alert em
 
 A new alert from `e-boks.dk`, `mit.dk`, `digitalpost.dk`, `borger.dk` or `aula.dk` skips the yes/no step. It is not a to-do of its own, because the email only says something is waiting. Instead Pocket Pal counts unread alerts per source ("Aula 3 · since Mon"), and the Mac keeps **one** to-do per source in Things Today, "Check Aula (3 new)", with every alert listed in its notes. A new alert updates that to-do's count (needs `things_auth_token`). Tick it in Things, or tap **Checked them** in Pocket Pal, and the count goes back to zero. Lookalike senders are still flagged as scams, and alerts older than a week aren't counted, so the first sync doesn't flood Things.
 
+Job alerts you set up (LinkedIn Job Alerts from `jobalerts-noreply@linkedin.com`, Jobindex) are counted the same way, as one "Check Job alerts (5 new)" to-do tagged Job hunt. Mail often files them as junk, so the Mac reads those senders from Junk too (only those senders).
+
+Some mail always needs you, so it also skips the yes/no step and goes to Things Today: anything real from the Danish teacher (`welcometodanmark.dk`: homework, new class times as "Danish class: …") and from the A-kasse (`aka.dk`), and job interview invitations. Earlier copies of the same email are folded, so five reminders make one to-do.
+
 The old one-per-email "Read in Aula: …" to-dos can be cleared in one go: add `"post_tidy": true` to `agent.json`. The Mac then cancels them in Things (they stay in the Logbook) on its next sync.
 
 Quick captures can skip Today: start them with `errand:` (Anytime, tag Errands), `house:` (the Around the house project) or `someday:`. The phone can also send `when`, `tags`, `list` and `deadline` with `/api/capture`.
@@ -136,7 +140,7 @@ Quick captures can skip Today: start them with `errand:` (Anytime, tag Errands),
 
 The agent reads Calendar.app's database (read-only) for "up next" on the watch. Every calendar Calendar.app shows counts: iCloud, Google, Exchange, and subscribed ones. For MSc lectures from an ICS link, use Calendar → File → New Calendar Subscription and paste the link. Leave calendars out with `"calendar_skip": ["Birthdays", "Work"]` in `agent.json` (the default skips Birthdays, Holidays and Siri Suggestions). `--dry-run` shows how many events it found.
 
-Interviews from the job tracker (`~/Documents/job-tracker/data/job_tracker.db`, read-only) join these events as "Interview: <company>". The job hunt pillar in `today.json` also gets `job_due` (the next deadline of a saved application or a Strong/Possible fit lead), `leads`, `applied_week` and `interview_at`. Point at another file with `"job_tracker_db"` in `agent.json`, or set it to `""` to turn it off.
+Interviews from the job tracker (`~/Documents/job-tracker/data/job_tracker.db`, read-only) join these events as "Interview: <company>". The job hunt pillar in `today.json` also gets `job_due` (the next deadline of a saved application or a Strong/Possible fit lead), `leads`, `applied_week` and `interview_at`. Strong fit leads and saved applications with a deadline get an "Apply: <title> at <company>" to-do, tagged Job hunt, that lands in Today a week before the deadline (with the Things deadline set) plus a "2 days left" nudge. Change which fit tiers count with `"job_apply_tiers": ["Strong fit", "Possible fit"]`. Point at another file with `"job_tracker_db"` in `agent.json`, or set it to `""` to turn it off.
 
 ## 9. Ticking things off from the watch or phone
 

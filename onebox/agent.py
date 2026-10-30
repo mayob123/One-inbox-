@@ -34,7 +34,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 from . import studycal
-from .triage import Message, summary, triage
+from .triage import JOB_ALERT_SENDERS, JOB_ALERTS, Message, summary, triage
 
 HOME = Path.home()
 MAIL_GLOB = str(HOME / "Library/Mail/V*/MailData/Envelope Index")
@@ -51,8 +51,11 @@ CALENDAR_SEEN = CONFIG_PATH.parent / "calendar-seen.json"
 JOB_TRACKER_DB = str(HOME / "Documents/job-tracker/data/job_tracker.db")
 JOB_LEADS = ("Strong fit", "Possible fit")  # job tracker fit tiers worth a deadline nudge
 LEADS_SHOWN = 5  # the best open leads the phone lists on the job hunt page
+JOB_APPLY = ("Strong fit",)  # tracker leads that get an "Apply:" to-do before their deadline ("job_apply_tiers")
 
 SKIP_MAILBOXES = ("junk", "spam", "trash", "deleted", "drafts", "blocked", "outbox")
+JUNK_MAILBOXES = ("junk", "spam")
+RESCUE_FROM_JUNK = JOB_ALERT_SENDERS  # Mail files job alerts as junk; read these senders from Junk anyway
 APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
 ICLOUD = HOME / "Library/Mobile Documents/com~apple~CloudDocs"
 
@@ -99,7 +102,9 @@ def read_mail(db_path: str, days: int = 21, account_labels: dict | None = None,
     for r in rows:
         box = mailbox_name(r["url"])
         if any(s in box.lower() for s in SKIP_MAILBOXES):
-            continue
+            rescue = (r["address"] or "").lower() in RESCUE_FROM_JUNK and any(s in box.lower() for s in JUNK_MAILBOXES)
+            if not rescue:
+                continue
         account_key = urllib.parse.urlparse(r["url"]).netloc
         out.append(Message(
             msg_id=f"{account_key}:{r['rowid']}",
@@ -551,6 +556,44 @@ def job_tracker(db_path: str, now: datetime, days: int = 14) -> tuple[list[dict]
     return events, extra
 
 
+def job_deadlines(cfg: dict, now: datetime) -> list[studycal.Event]:
+    """Strong-fit leads and saved applications with a deadline, as deadline events for studycal: an
+    "Apply: …" to-do lands in Things Today a week before (with the Things deadline set), plus a nudge
+    two days before. Empty if the tracker is missing or unreadable."""
+    path = cfg.get("job_tracker_db", JOB_TRACKER_DB)
+    if not path or not os.path.exists(path):
+        return []
+    tiers = tuple(cfg.get("job_apply_tiers") or JOB_APPLY)
+    today = now.date().isoformat()
+    try:
+        con = ro_connect(path)
+        try:
+            cols = {r[1] for r in con.execute("PRAGMA table_info(jobs)")}
+            link = next((c for c in ("url", "link", "job_url", "apply_url") if c in cols), None)
+            marks = ",".join("?" * len(tiers))
+            leads = con.execute(
+                f"""SELECT 'job:' || rowid AS uid, title, company, deadline, {link or 'NULL'} AS url FROM jobs
+                    WHERE COALESCE(dismissed, 0) = 0 AND COALESCE(likely_closed, 0) = 0
+                      AND fit_tier IN ({marks}) AND deadline >= ?""", (*tiers, today)).fetchall()
+            saved = con.execute(
+                """SELECT 'app:' || rowid AS uid, job_title AS title, company, deadline, NULL AS url FROM applications
+                   WHERE status = 'saved' AND deadline >= ?""", (today,)).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error:  # the tracker's schema is its own; never let it stop a sync
+        return []
+    out = []
+    for r in list(leads) + list(saved):
+        try:
+            due = date.fromisoformat((r["deadline"] or "")[:10])
+        except ValueError:
+            continue
+        what = " at ".join(p for p in (r["title"], r["company"]) if p) or "job"
+        out.append(studycal.Event(uid=r["uid"], title=f"Apply: {what}", start=due, calendar="job tracker",
+                                  url=r["url"] or "", tags=["Job hunt"], extra={"deadline": True}))
+    return out
+
+
 def read_job_tracker(cfg: dict, status: dict, now: datetime) -> str:
     """Adds the tracker's interviews to status["events"] and its deadlines to the job pillar."""
     path = cfg.get("job_tracker_db", JOB_TRACKER_DB)
@@ -721,13 +764,15 @@ def tag_in_things(cfg: dict, db_path: str, limit: int = 20) -> int | str:
 
 # --- Official post: one rolling "Check Aula (3 new)" to-do per source ------
 
-POST_TITLE = re.compile(r"^Check[ +](Aula|e-Boks|Digital[ +]Post)[ +]\(\d+[ +]new\)")  # "+": older broken updates
-POST_TAGS = {"Aula": ["Family"], "e-Boks": ["Home admin"], "Digital Post": ["Home admin"]}
+POST_TITLE = re.compile(r"^Check[ +](Aula|e-Boks|Digital[ +]Post|Job[ +]alerts)[ +]\(\d+[ +]new\)")  # "+": older broken updates
+POST_TAGS = {"Aula": ["Family"], "e-Boks": ["Home admin"], "Digital Post": ["Home admin"], JOB_ALERTS: ["Job hunt"]}
 OLD_POST_TODO = re.compile(r"^Read in (Aula|e-Boks|Digital Post): ")
 
 
 def post_notes(src: dict) -> str:
-    lines = [f"Open the {src['source']} app to read them, then tick this off.", ""]
+    how = ("Look through them in Mail (Mail may have put them in Junk) and save the good ones to the job tracker"
+           if src["source"] == JOB_ALERTS else f"Open the {src['source']} app to read them")
+    lines = [f"{how}, then tick this off.", ""]
     for it in reversed(src.get("items", [])):
         try:
             when = datetime.fromisoformat(it["received"]).astimezone().strftime("%a %-d %b %H:%M")
@@ -874,7 +919,7 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
         report["small_jobs"], report["this_week"] = len(status["pool"]), len(status["week"])
     if dry_run:
         report["would_send"] = len(items)
-        if cfg.get("calendars") or cfg.get("deadlines"):
+        if cfg.get("calendars") or cfg.get("deadlines") or job_deadlines(cfg, now):
             report["calendar"] = calendar_preview(cfg, now)
         return report
     call(cfg["server"], cfg["token"], "POST", "/api/ingest", payload)
@@ -894,6 +939,7 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
 
 def calendar_preview(cfg: dict, now: datetime) -> dict:
     events, errors = studycal.collect(cfg, now)
+    events += job_deadlines(cfg, now)
     seen = studycal.load_seen(Path(cfg.get("calendar_seen", CALENDAR_SEEN)))
     new = studycal.due_now(events, seen, now)
     return {"events": len(events), "would_add": [t["attributes"]["title"] for t in studycal.things_json(new, now.date())],
@@ -901,10 +947,12 @@ def calendar_preview(cfg: dict, now: datetime) -> dict:
 
 
 def sync_calendars(cfg: dict, now: datetime) -> dict:
-    if not cfg.get("calendars") and not cfg.get("deadlines"):
+    jobs = job_deadlines(cfg, now)
+    if not cfg.get("calendars") and not cfg.get("deadlines") and not jobs:
         return {}
     seen_path = Path(cfg.get("calendar_seen", CALENDAR_SEEN))
     events, errors = studycal.collect(cfg, now)
+    events += jobs
     seen = studycal.load_seen(seen_path)
     new = studycal.due_now(events, seen, now)
     todos = studycal.things_json(new, now.date())
