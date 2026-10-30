@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>One Inbox</title>
+<style>
+/* Decisions first, evidence second, noise last. */
+:root {
+  --bg: #F2F4F7; --surface: #FFFFFF; --sunken: #E8ECF1; --fg: #131B24; --muted: #4B5664; --line: #D6DCE3;
+  --accent: #2552C2; --accent-soft: #E6EDFC; --on-accent: #FFFFFF;
+  --good: #1D6E47; --good-soft: #E3F2EA; --bad: #A3261E; --bad-soft: #FBE7E5;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --bg: #0F141A; --surface: #18202A; --sunken: #212B37; --fg: #E9EEF4; --muted: #A6B1BF; --line: #2E3946;
+  --accent: #7FA4F5; --accent-soft: #1E2C49; --on-accent: #0F141A;
+  --good: #7FD3A6; --good-soft: #17352A; --bad: #F2948C; --bad-soft: #3D1D1B; color-scheme: dark } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, sans-serif;
+  padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 96px max(16px, env(safe-area-inset-left)); }
+.wrap { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+h1 { margin: 0; font-size: clamp(26px, 6vw, 36px); line-height: 1.1; letter-spacing: -0.01em; text-wrap: balance; }
+h2 { margin: 0; font-size: 20px; }
+.eyebrow { font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+.muted { color: var(--muted); }
+.stats { display: flex; flex-wrap: wrap; gap: 8px; }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; font-size: 14px; font-variant-numeric: tabular-nums; }
+section { display: flex; flex-direction: column; gap: 12px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.card.decided { opacity: 0.6; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px; font-size: 13px; color: var(--muted); align-items: center; }
+.chip { font-size: 12px; font-weight: 700; border-radius: 999px; padding: 2px 9px; background: var(--accent-soft); color: var(--accent); }
+.chip.plain { background: var(--sunken); color: var(--fg); font-weight: 400; }
+.title { font-size: 17px; font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
+.why { font-size: 14px; color: var(--muted); }
+.task { background: var(--sunken); border-radius: 10px; padding: 8px 12px; font-size: 15px; overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+button { font: 700 15px system-ui, sans-serif; min-height: 44px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 4px 16px; }
+.panel.scam { border-color: var(--bad); }
+.row { padding: 12px 0; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+.row:last-child { border-bottom: 0; }
+.row strong { overflow-wrap: anywhere; }
+.row small { color: var(--muted); font-size: 14px; }
+.empty { padding: 16px 0; color: var(--muted); }
+.status { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px max(16px, env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  background: var(--bg); border-top: 1px solid var(--line); font-size: 14px; color: var(--muted); text-align: center; }
+.capture { display: flex; gap: 8px; }
+.capture input { flex: 1; min-width: 0; font: 16px system-ui, sans-serif; min-height: 44px; padding: 0 12px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--fg); }
+.capture input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+details summary { cursor: pointer; font-weight: 700; min-height: 44px; display: flex; align-items: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header style="display:flex;flex-direction:column;gap:10px">
+    <div class="eyebrow" id="sync">One Inbox</div>
+    <h1 id="headline">Loading…</h1>
+    <div class="stats" id="stats"></div>
+  </header>
+
+  <form class="capture" id="capture" autocomplete="off">
+    <label for="captureText" style="position:absolute;left:-9999px">Add a to-do</label>
+    <input id="captureText" maxlength="500" placeholder="Add a to-do, e.g. Sign Aula form for Friday" enterkeyhint="done">
+    <button type="submit" class="primary">Add</button>
+  </form>
+
+  <section>
+    <h2 id="todayTitle">Today in Things</h2>
+    <div class="panel" id="today"></div>
+  </section>
+
+  <section>
+    <h2>Coming up</h2>
+    <div class="panel" id="events"></div>
+  </section>
+
+  <section>
+    <h2>Needs your call</h2>
+    <div id="decide" style="display:flex;flex-direction:column;gap:12px"></div>
+  </section>
+
+  <section>
+    <h2>Looks done already</h2>
+    <div class="panel" id="done"></div>
+  </section>
+
+  <section>
+    <h2>Likely scams: don't click</h2>
+    <div class="panel scam" id="scam"></div>
+  </section>
+
+  <section>
+    <details>
+      <summary id="otherSummary">Receipts, notices and newsletters</summary>
+      <div class="panel" id="other"></div>
+    </details>
+  </section>
+</div>
+<div class="status" id="status" role="status" aria-live="polite">Picks marked Add go to Things on your next Mac sync.</div>
+
+<script>
+const LABELS = [['add', 'Add to Things'], ['done', 'Already done'], ['none', 'No action needed']];
+const $ = id => document.getElementById(id);
+function el(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
+function when(iso) { try { return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }); } catch (e) { return ''; } }
+function say(t) { $('status').textContent = t; }
+
+async function decide(id, decision) {
+  const r = await fetch('/api/items/' + id + '/decision', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision }) });
+  if (r.status === 401) { location.reload(); return; }
+  if (!r.ok) { say('Could not save that. It may already be in Things.'); return; }
+  say(decision === 'add' ? 'Queued. Your Mac adds it to Things on its next sync.'
+    : decision === 'none' ? 'Got it. Emails from this sender will be folded away from now on.' : 'Saved.');
+  load();
+}
+
+async function unquiet(sender) {
+  const r = await fetch('/api/quiet/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sender }) });
+  if (r.status === 401) { location.reload(); return; }
+  say('OK, emails from this sender will ask you again.');
+  load();
+}
+
+$('capture').onsubmit = async e => {
+  e.preventDefault();
+  const box = $('captureText'), text = box.value.trim();
+  if (!text) return;
+  const r = await fetch('/api/capture', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+  if (r.status === 401) { location.reload(); return; }
+  if (!r.ok) { say('Could not add that. Try a shorter line.'); return; }
+  box.value = '';
+  say((await r.json()).message);
+  load();
+};
+
+function card(it) {
+  const c = el('article', 'card' + (it.decision ? ' decided' : ''));
+  const meta = el('div', 'meta');
+  meta.append(el('span', 'chip', it.source === 'capture' ? 'You added' : it.lang === 'da' ? 'Danish' : (it.source || 'Mail')), el('span', 'chip plain', it.area), el('span', null, (it.sender || '') + ' · ' + when(it.received)));
+  c.append(meta, el('div', 'title', it.title), el('div', 'why', it.why), el('div', 'task', 'Task: ' + it.task));
+  const acts = el('div', 'actions');
+  if (it.in_things) { acts.append(el('span', 'muted', 'In Things')); }
+  else LABELS.forEach(([k, label]) => {
+    const b = el('button', k === 'add' ? 'primary' : null, label);
+    b.type = 'button';
+    b.setAttribute('aria-pressed', String(it.decision === k));
+    b.onclick = () => decide(it.id, it.decision === k ? null : k);
+    acts.append(b);
+  });
+  c.append(acts);
+  return c;
+}
+
+function rows(box, list, empty) {
+  box.textContent = '';
+  if (!list.length) { box.append(el('div', 'empty', empty)); return; }
+  list.forEach(it => {
+    const r = el('div', 'row');
+    r.append(el('strong', null, it.title), el('small', null, (it.sender || '') + ' · ' + when(it.received) + ' · ' + it.why));
+    if (it.quiet) {
+      const b = el('button', null, 'Ask me again');
+      b.type = 'button'; b.style.alignSelf = 'flex-start'; b.onclick = () => unquiet(it.quiet);
+      r.append(b);
+    }
+    box.append(r);
+  });
+}
+
+const KIND_NAMES = { bill: 'Bill', school: 'School', admin: 'Admin', msc: 'MSc', job: 'Job', danish: 'Danish', friend: 'Friends', travel: 'Travel' };
+
+function todayList(things) {
+  const box = $('today'); box.textContent = '';
+  const list = things.today || [];
+  $('todayTitle').textContent = 'Today in Things' + (things.left ? ' (' + things.left + ' left)' : '');
+  if (!list.length) { box.append(el('div', 'empty', things.at ? 'Nothing left today. Nice.' : 'Waiting for the first Mac sync.')); return; }
+  list.forEach(it => {
+    const r = el('div', 'row');
+    const meta = [KIND_NAMES[it.kind], it.due ? 'due ' + when(it.due) : null].filter(Boolean).join(' · ');
+    r.append(el('strong', null, it.title));
+    if (meta) r.append(el('small', null, meta));
+    box.append(r);
+  });
+  if (things.left > list.length) box.append(el('div', 'empty', '…and ' + (things.left - list.length) + ' more in Things.'));
+}
+
+function eventList(events) {
+  const box = $('events'); box.textContent = '';
+  const now = Date.now();
+  const soon = (events || []).filter(e => new Date(e.start).getTime() > now);
+  if (!soon.length) { box.append(el('div', 'empty', 'Nothing in your calendar for the next two days.')); return; }
+  soon.forEach(e => {
+    const r = el('div', 'row');
+    const t = new Date(e.start);
+    const day = t.toDateString() === new Date().toDateString() ? 'Today' : t.toLocaleDateString(undefined, { weekday: 'short' });
+    r.append(el('strong', null, e.title), el('small', null, day + ' ' + t.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })));
+    box.append(r);
+  });
+}
+
+async function load() {
+  const r = await fetch('/api/items');
+  if (r.status === 401) { location.reload(); return; }
+  const data = await r.json();
+  const by = s => data.items.filter(i => i.status === s);
+  const open = by('decide').filter(i => !i.decision);
+  $('headline').textContent = open.length ? open.length + (open.length === 1 ? ' thing needs' : ' things need') + ' a quick yes or no' : 'All sorted. Nice.';
+  $('sync').textContent = 'One Inbox · ' + (data.last_sync ? 'synced ' + new Date(data.last_sync).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : 'waiting for first Mac sync');
+  const stats = $('stats'); stats.textContent = '';
+  [[open.length, 'to decide'], [by('done').length, 'look done'], [by('scam').length, 'likely scams'], [by('noise').length, 'newsletters skipped'], [data.xp, 'XP']].forEach(([n, l]) => stats.append(el('span', 'stat', n + ' ' + l)));
+  todayList(data.things || {});
+  eventList((data.things || {}).events);
+  const d = $('decide'); d.textContent = '';
+  const decideItems = by('decide').filter(i => i.decision !== 'none').sort((a, b) => (!!a.decision - !!b.decision) || b.received.localeCompare(a.received));
+  if (!decideItems.length) d.append(el('div', 'empty', 'Nothing waiting.'));
+  decideItems.forEach(it => d.append(card(it)));
+  rows($('done'), by('done'), 'Nothing yet.');
+  rows($('scam'), by('scam'), 'None spotted.');
+  const other = by('info').concat(by('noise'));
+  $('otherSummary').textContent = 'Receipts, notices and newsletters (' + other.length + ')';
+  rows($('other'), other, 'None.');
+}
+load();
+setInterval(() => { if (!document.hidden) load(); }, 60000);
+</script>
+</body>
+</html>

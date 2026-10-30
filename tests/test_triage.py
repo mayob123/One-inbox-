@@ -1,0 +1,257 @@
+import unittest
+from datetime import datetime, timedelta, timezone
+
+from onebox.triage import Message, capture, capture_item, is_scam, normalize_subject, triage
+
+T0 = datetime(2026, 10, 14, 9, 0, tzinfo=timezone.utc)
+
+
+def msg(subject, addr, name="", days=0, box="INBOX", mid=None):
+    return Message(msg_id=mid or f"{subject}-{days}", sender_name=name, sender_addr=addr, subject=subject,
+                   received=T0 + timedelta(days=days), mailbox=box, account="mac")
+
+
+def by_title(items):
+    return {i.title: i for i in items}
+
+
+class TriageTests(unittest.TestCase):
+    def test_reply_in_sent_marks_done(self):
+        items = by_title(triage([
+            msg("2nd interview: Case", "hr@example.dk", "Maria"),
+            msg("Re: 2nd interview: Case", "ben@mac.com", box="Sent", days=2),
+        ]))
+        self.assertEqual(items["2nd interview: Case"].status, "done")
+        self.assertIn("You replied", items["2nd interview: Case"].why)
+
+    def test_accepted_invite_marks_done(self):
+        items = by_title(triage([
+            msg("Invitation: WtD - Ben, Thu Oct 15", "adil@welcometodanmark.dk"),
+            msg("Accepted: Invitation: WtD - Ben, Thu Oct 15", "ben@mac.com", box="Sent", days=1),
+        ]))
+        self.assertEqual(items["Invitation: WtD - Ben, Thu Oct 15"].status, "done")
+
+    def test_later_confirmation_on_same_topic_marks_done(self):
+        items = by_title(triage([
+            msg("URGENT: University of York - Payment Deadline", "enrolments@online.york.ac.uk",
+                "University of York Online Enrolments"),
+            msg("Receipt for online payment from eVision", "do-not-reply@notifications.york.ac.uk", days=9),
+        ]))
+        self.assertEqual(items["URGENT: University of York - Payment Deadline"].status, "done")
+
+    def test_confirmation_on_other_topic_does_not_mark_done(self):
+        items = by_title(triage([
+            msg("University of York - York Online Joining Instructions", "student-records@york.ac.uk"),
+            msg("University of York - Confirmation of Module Registration", "york-online-admin@york.ac.uk", days=8),
+        ]))
+        self.assertEqual(items["University of York - York Online Joining Instructions"].status, "decide")
+
+    def test_lookalike_brand_is_scam(self):
+        m = msg("EasyPark AB-Dit kort er udløbet", "reviews@reviewmgr.com", "Kundeservice")
+        self.assertIsNotNone(is_scam(m))
+        self.assertEqual(triage([m])[0].status, "scam")
+
+    def test_real_brand_domain_is_not_scam(self):
+        self.assertIsNone(is_scam(msg("Your EasyPark receipt", "noreply@easypark.net", "EasyPark")))
+
+    def test_payment_update_request_is_scam(self):
+        self.assertEqual(triage([msg("Vigtigt: Opdater dine betalingsoplysninger", "info@reviewmgr.com")])[0].status, "scam")
+
+    def test_newsletters_and_receipts_stay_out_of_the_way(self):
+        items = by_title(triage([
+            msg("Summer Sale now on!", "emails@euenews.uniqlo.com", "UNIQLO"),
+            msg("Rejsekort receipt – Oct 23, 2026", "noreply@rejsekort.dk"),
+        ]))
+        self.assertEqual(items["Summer Sale now on!"].status, "noise")
+        self.assertEqual(items["Rejsekort receipt – Oct 23, 2026"].status, "info")
+
+    def test_bill_needs_a_decision(self):
+        it = triage([msg("Your latest bill is here Ben", "noreply@notify.vodafone.co.uk", "Vodafone")])[0]
+        self.assertEqual((it.status, it.kind), ("decide", "bill"))
+        self.assertTrue(it.task.startswith("Check and pay"))
+
+    def test_danish_mail_is_flagged(self):
+        it = triage([msg("Påmindelse fra tandlægen", "info@sehestedtand.dk", "Sehested Tandlægerne")])[0]
+        self.assertEqual((it.status, it.lang, it.area), ("decide", "da", "Admin & bills"))
+
+    def test_sent_mail_never_becomes_an_item(self):
+        self.assertEqual(triage([msg("Handing in my notice", "ben@mac.com", box="Sent")]), [])
+
+    def test_normalize_subject(self):
+        self.assertEqual(normalize_subject("Re: Sv: Fwd: Hello  World"), "hello world")
+
+    def test_ids_are_stable(self):
+        a = triage([msg("Hello", "a@b.dk", mid="x1")])[0].id
+        b = triage([msg("Hello", "a@b.dk", mid="x1")])[0].id
+        self.assertEqual(a, b)
+        self.assertRegex(a, r"^[0-9a-f]{16}$")
+
+    def test_official_post_is_counted_not_added(self):
+        items = by_title(triage([
+            msg("Du har modtaget ny post", "noreply@e-boks.dk", "e-Boks"),
+            msg("Ny besked fra Lærer", "noreply@aula.dk", "Aula", days=1),
+            msg("Du har modtaget Digital Post", "noreply@mit.dk", "Digital Post", days=1),
+        ], now=T0 + timedelta(days=2)))
+        for title, where in [("Du har modtaget ny post", "e-Boks"), ("Ny besked fra Lærer", "Aula"),
+                             ("Du har modtaget Digital Post", "Digital Post")]:
+            self.assertEqual((items[title].status, items[title].auto, items[title].post), ("decide", "", where), title)
+            self.assertTrue(items[title].task.startswith(f"Read in {where}:"))
+
+    def test_old_or_lookalike_official_post_is_not_counted(self):
+        items = by_title(triage([
+            msg("Ny besked", "noreply@aula.dk", "Aula"),
+            msg("Du har ny post i e-Boks", "info@eboks-dk.com", "e-Boks"),
+        ], now=T0 + timedelta(days=10)))
+        self.assertEqual((items["Ny besked"].status, items["Ny besked"].post), ("decide", ""))
+        self.assertEqual(items["Du har ny post i e-Boks"].status, "scam")
+
+    def test_capture_item(self):
+        it = capture_item("  Sign the  Aula form for Friday ", T0)
+        self.assertEqual((it.title, it.kind, it.auto, it.source), ("Sign the Aula form for Friday", "school", "things", "capture"))
+        self.assertNotEqual(it.id, capture_item("Sign the Aula form for Friday", T0 + timedelta(seconds=1)).id)
+
+    def test_capture_places(self):
+        errand = capture("Errand: pick up the frames", T0)
+        self.assertEqual((errand["task"], errand["when"], errand["tags"]), ("Pick up the frames", "anytime", ["Errands"]))
+        house = capture("house - hang pictures in the spare room", T0)
+        self.assertEqual((house["task"], house["when"], house["list"]), ("Hang pictures in the spare room", "anytime",
+                                                                         "Around the house"))
+        self.assertEqual(capture("someday: learn the banjo", T0)["when"], "someday")
+        plain = capture("Ring the dentist", T0)
+        self.assertNotIn("when", plain)
+        self.assertEqual(plain["auto"], "things")
+        sent = capture("Sign trip form", T0, {"when": "today", "tags": ["Family"], "deadline": "2026-10-30",
+                                             "list": "", "bogus": 1})
+        self.assertEqual((sent["when"], sent["tags"], sent["deadline"]), ("today", ["Family"], "2026-10-30"))
+        self.assertNotIn("list", sent)
+        self.assertNotIn("deadline", capture("x", T0, {"deadline": "Friday"}))
+        self.assertEqual(capture("errand:", T0)["task"], "errand:")  # nothing after the place: keep it as typed
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class HomeworkTests(unittest.TestCase):
+    def test_danish_homework_goes_to_things_for_today(self):
+        items = by_title(triage([msg("Re: manglende lektier", "adil@welcometodanmark.dk", "Adil", days=0),
+                                 msg("Lektier til uge 40", "adil@welcometodanmark.dk", "Adil", days=-20)], T0))
+        new = items["Re: manglende lektier"]
+        self.assertEqual((new.status, new.auto, new.kind), ("decide", "things", "danish"))
+        self.assertEqual(new.task, "Danish homework: Manglende lektier")
+        self.assertEqual(items["Lektier til uge 40"].auto, "")  # too old to add by itself
+        self.assertTrue(new.ref)
+
+
+class AutoAddTests(unittest.TestCase):
+    def test_job_alerts_are_counted_not_folded(self):
+        items = triage([msg("Banedanmark: Projektledere til informations- og cybersikkerhed", "jobalerts-noreply@linkedin.com",
+                            "LinkedIn Job Alerts", box="Junk"),
+                        msg("DTU is hiring a Ledelsessekretær/PA", "jobalerts-noreply@linkedin.com", "LinkedIn Job Alerts"),
+                        msg("Have you applied for this job?", "mailservice@jobindex.dk", "Jobindex"),
+                        msg("Old alert", "jobalerts-noreply@linkedin.com", days=-10)], T0)
+        got = {i.title: (i.status, i.post, i.kind, i.auto) for i in items}
+        self.assertEqual(got["DTU is hiring a Ledelsessekretær/PA"], ("decide", "Job alerts", "job", ""))
+        self.assertEqual(got["Have you applied for this job?"], ("decide", "Job alerts", "job", ""))
+        self.assertEqual(got["Old alert"][1], "")
+        # other LinkedIn mail is still folded away
+        self.assertEqual(triage([msg("X is hiring for a Remote role", "jobs-noreply@linkedin.com")], T0)[0].status, "noise")
+
+    def test_danish_teacher_and_a_kasse_go_to_things(self):
+        items = by_title(triage([
+            msg("Invitation: WtD - Ben, Thu Oct 29 12:45-13:45", "adil@welcometodanmark.dk", "Adil Mirzakhanova"),
+            msg("Vi har brug for oplysninger om dine arbejdstimer", "kontakt@aka.dk", "Akademikernes A-kasse", mid="a"),
+            msg("Vi har brug for oplysninger om dine arbejdstimer [id:EqVm12]", "kontakt@aka.dk",
+                "Akademikernes A-kasse", days=1, mid="b"),
+            msg("Invitation for 1. interview - online", "hr@ms.dk", "Mellemfolkeligt Samvirke"),
+            msg("Old A-kasse question", "kontakt@aka.dk", days=-10),
+        ], T0 + timedelta(days=1)))
+        wtd = items["Invitation: WtD - Ben, Thu Oct 29 12:45-13:45"]
+        self.assertEqual((wtd.status, wtd.auto, wtd.task), ("decide", "things", "Danish class: WtD - Ben, Thu Oct 29 12:45-13:45"))
+        self.assertEqual(items["Vi har brug for oplysninger om dine arbejdstimer"].status, "info")  # earlier copy
+        aka = items["Vi har brug for oplysninger om dine arbejdstimer [id:EqVm12]"]
+        self.assertEqual((aka.auto, aka.task), ("things", "Deal with: Vi har brug for oplysninger om dine arbejdstimer"))
+        self.assertEqual(items["Invitation for 1. interview - online"].auto, "things")
+        self.assertEqual(items["Old A-kasse question"].auto, "")
+        # ordinary mail still waits for a tap
+        self.assertEqual(triage([msg("Query about July hours", "mlh@saysky.dk")], T0)[0].auto, "")
+
+
+class FilterTests(unittest.TestCase):
+    def status(self, subject, addr, name=""):
+        return triage([msg(subject, addr, name)])[0].status
+
+    def test_ci_failure_is_a_notice(self):
+        self.assertEqual(self.status("[mayob123/firered-3ds] Run failed: Test build", "notifications@github.com",
+                                     "mayob123"), "info")
+
+    def test_real_github_action_still_needs_a_call(self):
+        self.assertEqual(self.status("[ACTION REQUIRED] Your GitHub account will soon require 2FA",
+                                     "noreply@github.com", "GitHub"), "decide")
+
+    def test_marketing_is_folded(self):
+        self.assertEqual(self.status("🚨 Sample Thursday is HERE🚨", "hello@pinchme.com", "PINCHme"), "noise")
+        self.assertEqual(self.status("Save 50% on Parallels Desktop", "news@parallels.com", "Parallels"), "noise")
+        self.assertEqual(self.status("You've got $15 credit to spend", "x@wonderbly.com", "Wonderbly"), "noise")
+
+    def test_codes_and_logins_are_security_notices(self):
+        self.assertEqual(self.status("Your one-time code: 834605", "no-reply@strava.com", "Strava"), "info")
+        self.assertEqual(self.status("We noticed a new login", "disney@disneyplus.com", "Disney+"), "info")
+
+    def test_application_acknowledgement_is_a_notice(self):
+        self.assertEqual(self.status("Thank you for your application", "jobs@ms.dk"), "info")
+
+    def test_job_interview_and_bills_still_need_a_call(self):
+        self.assertEqual(self.status("Your Interview tomorrow – Team Lead", "nanna@ms.dk", "Nanna"), "decide")
+        self.assertEqual(self.status("Your latest bill is here Ben", "billing@vodafone.dk", "Vodafone"), "decide")
+
+    def test_school_welcome_is_not_hidden(self):
+        self.assertEqual(self.status("Welcome evening for parents", "noreply@aula.dk", "Aula"), "decide")
+
+    def test_duplicate_keeps_only_newest(self):
+        items = triage([msg("Start Date", "enrol@york.ac.uk", days=0, mid="a"),
+                        msg("Start Date", "enrol@york.ac.uk", days=1, mid="b")])
+        self.assertEqual([i.status for i in items], ["info", "decide"])
+
+    def test_job_ads_are_folded(self):
+        self.assertEqual(self.status("Ben, looking for a new job?", "jobs@linkedin.com", "LinkedIn"), "noise")
+
+
+class ScheduleFromTextTests(unittest.TestCase):
+    NOW = datetime(2026, 10, 30, 11, 0, tzinfo=timezone.utc)  # a Friday
+
+    def s(self, text):
+        from onebox.triage import schedule_from_text
+        return schedule_from_text(text, self.NOW)
+
+    def test_named_day_goes_to_that_day(self):
+        self.assertEqual(self.s("Dentist on Monday"), {"when": "2026-11-02"})
+        self.assertEqual(self.s("Dentist on Monday at 9"), {"when": "2026-11-02@09:00"})
+        self.assertEqual(self.s("Call the bank tomorrow at 2:30pm"), {"when": "2026-10-31@14:30"})
+        self.assertEqual(self.s("Ring Tom kl. 14 på tirsdag"), {"when": "2026-11-03@14:00"})
+        self.assertEqual(self.s("Parents evening 12 Nov"), {"when": "2026-11-12"})
+        self.assertEqual(self.s("Flights Jan 5"), {"when": "2027-01-05"})
+        self.assertEqual(self.s("Pick up parcel 3/11"), {"when": "2026-11-03"})
+        self.assertEqual(self.s("Start module 2026-11-02"), {"when": "2026-11-02"})
+
+    def test_today_and_next(self):
+        self.assertEqual(self.s("Gym friday"), {})  # today, no time: plain Today
+        self.assertEqual(self.s("Gym friday at 18"), {"when": "2026-10-30@18:00"})
+        self.assertEqual(self.s("Gym next friday"), {"when": "2026-11-06"})
+        self.assertEqual(self.s("Call mum at 6pm"), {"when": "2026-10-30@18:00"})
+
+    def test_by_a_day_is_a_deadline(self):
+        self.assertEqual(self.s("Sign the Aula form for Friday"), {"deadline": "2026-10-30"})  # due today
+        self.assertEqual(self.s("Send the form by Monday"), {"deadline": "2026-11-02"})
+        self.assertEqual(self.s("Essay due 14 Dec"), {"deadline": "2026-12-14"})
+
+    def test_no_day(self):
+        self.assertEqual(self.s("Buy milk"), {})
+        self.assertEqual(self.s("Monthly budget review"), {})
+        self.assertEqual(self.s("Book a monitor stand"), {})
+
+    def test_capture_uses_it_unless_told_where(self):
+        self.assertEqual(capture("Dentist on Monday at 9", self.NOW)["when"], "2026-11-02@09:00")
+        self.assertEqual(capture("errand: pick up frames on Monday", self.NOW)["when"], "anytime")
+        self.assertEqual(capture("Dentist on Monday", self.NOW, {"when": "2026-11-04"})["when"], "2026-11-04")
+        self.assertNotIn("when", capture("Buy milk", self.NOW))
