@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 from . import feed
 from .pihole import PiHole
 from .store import Store
-from .triage import OFFICIAL_POST, capture
+from .triage import POST_SOURCES, capture
 
 WEB_DIR = Path(__file__).parent / "web"
 COOKIE = "onebox_key"
@@ -216,8 +216,8 @@ def make_handler(cfg: Config, store: Store):
                     if not self._todo_ok():
                         return self._send(401)
                     source = str(self._body().get("source") or "")
-                    if source not in OFFICIAL_POST:
-                        return self._json(400, {"error": "source must be one of " + ", ".join(OFFICIAL_POST)})
+                    if source not in POST_SOURCES:
+                        return self._json(400, {"error": "source must be one of " + ", ".join(POST_SOURCES)})
                     n = store.check_post(source)
                     # tick the rolling "Check Aula (3 new)" to-do too; the Mac completes it in Things
                     for r in store.get_meta("things_status", {}).get("today") or []:

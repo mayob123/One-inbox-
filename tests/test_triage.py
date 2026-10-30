@@ -143,6 +143,40 @@ class HomeworkTests(unittest.TestCase):
         self.assertTrue(new.ref)
 
 
+class AutoAddTests(unittest.TestCase):
+    def test_job_alerts_are_counted_not_folded(self):
+        items = triage([msg("Banedanmark: Projektledere til informations- og cybersikkerhed", "jobalerts-noreply@linkedin.com",
+                            "LinkedIn Job Alerts", box="Junk"),
+                        msg("DTU is hiring a Ledelsessekretær/PA", "jobalerts-noreply@linkedin.com", "LinkedIn Job Alerts"),
+                        msg("Have you applied for this job?", "mailservice@jobindex.dk", "Jobindex"),
+                        msg("Old alert", "jobalerts-noreply@linkedin.com", days=-10)], T0)
+        got = {i.title: (i.status, i.post, i.kind, i.auto) for i in items}
+        self.assertEqual(got["DTU is hiring a Ledelsessekretær/PA"], ("decide", "Job alerts", "job", ""))
+        self.assertEqual(got["Have you applied for this job?"], ("decide", "Job alerts", "job", ""))
+        self.assertEqual(got["Old alert"][1], "")
+        # other LinkedIn mail is still folded away
+        self.assertEqual(triage([msg("X is hiring for a Remote role", "jobs-noreply@linkedin.com")], T0)[0].status, "noise")
+
+    def test_danish_teacher_and_a_kasse_go_to_things(self):
+        items = by_title(triage([
+            msg("Invitation: WtD - Ben, Thu Oct 29 12:45-13:45", "adil@welcometodanmark.dk", "Adil Mirzakhanova"),
+            msg("Vi har brug for oplysninger om dine arbejdstimer", "kontakt@aka.dk", "Akademikernes A-kasse", mid="a"),
+            msg("Vi har brug for oplysninger om dine arbejdstimer [id:EqVm12]", "kontakt@aka.dk",
+                "Akademikernes A-kasse", days=1, mid="b"),
+            msg("Invitation for 1. interview - online", "hr@ms.dk", "Mellemfolkeligt Samvirke"),
+            msg("Old A-kasse question", "kontakt@aka.dk", days=-10),
+        ], T0 + timedelta(days=1)))
+        wtd = items["Invitation: WtD - Ben, Thu Oct 29 12:45-13:45"]
+        self.assertEqual((wtd.status, wtd.auto, wtd.task), ("decide", "things", "Danish class: WtD - Ben, Thu Oct 29 12:45-13:45"))
+        self.assertEqual(items["Vi har brug for oplysninger om dine arbejdstimer"].status, "info")  # earlier copy
+        aka = items["Vi har brug for oplysninger om dine arbejdstimer [id:EqVm12]"]
+        self.assertEqual((aka.auto, aka.task), ("things", "Deal with: Vi har brug for oplysninger om dine arbejdstimer"))
+        self.assertEqual(items["Invitation for 1. interview - online"].auto, "things")
+        self.assertEqual(items["Old A-kasse question"].auto, "")
+        # ordinary mail still waits for a tap
+        self.assertEqual(triage([msg("Query about July hours", "mlh@saysky.dk")], T0)[0].auto, "")
+
+
 class FilterTests(unittest.TestCase):
     def status(self, subject, addr, name=""):
         return triage([msg(subject, addr, name)])[0].status

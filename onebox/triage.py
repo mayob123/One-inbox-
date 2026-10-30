@@ -125,9 +125,22 @@ OFFICIAL_POST = {
     "Digital Post": ("mit.dk", "digitalpost.dk", "borger.dk"),
     "Aula": ("aula.dk",),
 }
+# Job alerts Ben set up himself. Like official post they are counted, not added one by one: the Mac keeps
+# one rolling "Check Job alerts (5 new)" to-do in Things. Matched on the exact sender address. Mail tends to
+# file these as junk, so the Mac reads them from Junk too (agent.RESCUE_FROM_JUNK).
+JOB_ALERTS = "Job alerts"
+JOB_ALERT_SENDERS = {"jobalerts-noreply@linkedin.com", "mailservice@jobindex.dk", "jobagent@jobindex.dk"}
+POST_SOURCES = (*OFFICIAL_POST, JOB_ALERTS)
 AUTO_ADD_DAYS = 7  # older alerts and homework stay on the page, so a first sync doesn't flood Things
 # Homework from the Danish teacher goes straight to Things for today.
 HOMEWORK = re.compile(r"lektie|homework|hjemmearbejde|opgave", re.I)
+# Senders whose real mail (not noise, not a receipt) always needs Ben, so it goes straight to Things:
+# the Danish teacher (homework, new class times) and the A-kasse (questions about hours worked).
+AUTO_DOMAINS = ("welcometodanmark.dk", "aka.dk")
+# A job interview being set up goes straight to Things too.
+INTERVIEW = re.compile(r"interview|samtale", re.I)
+INVITE_PREFIX = re.compile(r"^\s*(opdateret )?invitation\s*:\s*", re.I)
+TICKET_ID = re.compile(r"\s*\[id:[^\]]*\]", re.I)  # "[id:EqVm…]" on support-desk replies
 
 SUBJECT_PREFIX = re.compile(r"^\s*((re|fwd?|fw|sv|vs|aw|vb|accepted|declined|opdateret invitation)\s*:\s*)+", re.I)
 
@@ -180,7 +193,7 @@ class Item:
 
 
 def normalize_subject(subject: str) -> str:
-    s = SUBJECT_PREFIX.sub("", subject or "")
+    s = TICKET_ID.sub("", SUBJECT_PREFIX.sub("", subject or ""))
     s = re.sub(r"\s+", " ", s).strip().lower()
     return s
 
@@ -248,8 +261,10 @@ def language(msg: Message) -> str:
 
 def suggest_task(msg: Message, kind: str) -> str:
     who = (msg.sender_name or msg.sender_addr).split("<")[0].strip().strip('"') or "sender"
-    subject = SUBJECT_PREFIX.sub("", msg.subject).strip() or "(no subject)"
-    if kind == "bill":
+    subject = TICKET_ID.sub("", SUBJECT_PREFIX.sub("", msg.subject)).strip() or "(no subject)"
+    if kind == "danish" and INVITE_PREFIX.match(subject):
+        text = f"Danish class: {INVITE_PREFIX.sub('', subject)}"
+    elif kind == "bill":
         text = f"Check and pay: {who}"
     elif kind == "friend":
         text = f"Reply to {who}: {subject}"
@@ -342,6 +357,12 @@ def triage(messages: list[Message], now: datetime | None = None) -> list[Item]:
             why = f"New in {post}. " + (f"Counted in today's Check {post} to-do." if fresh else "Older than a week, so not counted.")
             items.append(Item(status="decide", why=why, post=post if fresh else "", **base))
             continue
+        if msg.sender_addr.lower() in JOB_ALERT_SENDERS:
+            fresh = now - msg.received <= timedelta(days=AUTO_ADD_DAYS)
+            base.update(area="Job search", kind="job", task=_cut(f"Look at job alert: {base['title']}"))
+            why = "A job alert. " + ("Counted in today's Check Job alerts to-do." if fresh else "Older than a week, so not counted.")
+            items.append(Item(status="decide", why=why, post=JOB_ALERTS if fresh else "", **base))
+            continue
         if kind == "danish" and HOMEWORK.search(msg.subject):
             fresh = now - msg.received <= timedelta(days=AUTO_ADD_DAYS)
             base["task"] = _cut(f"Danish homework: {normalize_subject(msg.subject).capitalize()}")
@@ -378,7 +399,11 @@ def triage(messages: list[Message], now: datetime | None = None) -> list[Item]:
         why = "No reply or confirmation found yet."
         if base["lang"] == "da":
             why = "In Danish. " + why
-        items.append(Item(status="decide", why=why, **base))
+        auto = ""
+        if _domain_matches(msg.domain, AUTO_DOMAINS) or (kind == "job" and INTERVIEW.search(msg.subject)):
+            if now - msg.received <= timedelta(days=AUTO_ADD_DAYS):
+                auto, why = "things", why + " Added to Things for today."
+        items.append(Item(status="decide", why=why, auto=auto, **base))
     return items
 
 

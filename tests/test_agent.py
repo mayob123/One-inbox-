@@ -8,7 +8,7 @@ import unittest
 import urllib.parse
 from datetime import date, datetime, timedelta, timezone
 
-from onebox import agent
+from onebox import agent, studycal
 
 NOW = datetime(2026, 10, 26, 9, 0, tzinfo=timezone.utc)
 
@@ -22,8 +22,9 @@ def make_mail(path):
       CREATE TABLE addresses (ROWID INTEGER PRIMARY KEY, address TEXT, comment TEXT);
       CREATE TABLE mailboxes (ROWID INTEGER PRIMARY KEY, url TEXT);
       INSERT INTO mailboxes VALUES (1, 'imap://ACC1/INBOX'), (2, 'imap://ACC1/Sent%20Messages'), (3, 'imap://ACC1/Junk');
-      INSERT INTO addresses VALUES (1, 'hr@example.dk', 'Maria'), (2, 'ben@mac.com', 'Ben'), (3, 'x@spam.biz', 'Spam');
-      INSERT INTO subjects VALUES (1, '2nd interview: Case'), (2, 'Win a prize'), (3, 'Old thing');
+      INSERT INTO addresses VALUES (1, 'hr@example.dk', 'Maria'), (2, 'ben@mac.com', 'Ben'), (3, 'x@spam.biz', 'Spam'),
+        (4, 'jobalerts-noreply@linkedin.com', 'LinkedIn Job Alerts');
+      INSERT INTO subjects VALUES (1, '2nd interview: Case'), (2, 'Win a prize'), (3, 'Old thing'), (4, 'DTU is hiring');
     """)
     t = int(NOW.timestamp())
     con.executemany("INSERT INTO messages VALUES (?,?,?,?,?,?,?,?)", [
@@ -31,6 +32,7 @@ def make_mail(path):
         (2, 2, 'Re: ', 1, t - 4 * 86400, 2, 1, 0),
         (3, 3, '', 2, t - 1 * 86400, 3, 0, 0),        # junk: skipped
         (4, 1, '', 3, t - 60 * 86400, 1, 1, 0),       # too old: skipped
+        (5, 4, '', 4, t - 1 * 86400, 3, 0, 0),        # a job alert Mail put in junk: kept
     ])
     con.commit()
     con.close()
@@ -123,8 +125,8 @@ class AgentTests(unittest.TestCase):
 
     def test_read_mail_skips_junk_and_old(self):
         msgs = agent.read_mail(self.mail, days=21, account_labels={"ACC1": "mac.com"}, now=NOW)
-        self.assertEqual(sorted(m.subject for m in msgs), ["2nd interview: Case", "Re: 2nd interview: Case"])
-        self.assertEqual({m.mailbox for m in msgs}, {"INBOX", "Sent"})
+        self.assertEqual(sorted(m.subject for m in msgs), ["2nd interview: Case", "DTU is hiring", "Re: 2nd interview: Case"])
+        self.assertEqual({m.mailbox for m in msgs}, {"INBOX", "Sent", "Junk"})  # junk only for job alerts
         self.assertEqual({m.account for m in msgs}, {"mac.com"})
 
     def test_things_date_roundtrip(self):
@@ -227,6 +229,25 @@ class AgentTests(unittest.TestCase):
                          (NOW + timedelta(hours=5)).replace(second=0, microsecond=0))
         self.assertEqual(agent.read_job_tracker({"job_tracker_db": self.mail}, {}, NOW)[:9], "Could not")
         self.assertEqual(agent.read_job_tracker({"job_tracker_db": "/nonexistent"}, {}, NOW), "Job tracker not found.")
+
+    def test_job_deadlines_become_apply_todos(self):
+        db = os.path.join(self.dir.name, "job_tracker.db")
+        make_job_tracker(db)
+        events = agent.job_deadlines({"job_tracker_db": db}, NOW)
+        self.assertEqual(sorted(e.title for e in events), ["Apply: Saved Co", "Apply: Strong"])
+        todos = studycal.things_json(events, NOW.date())
+        strong = next(t["attributes"] for t in todos if t["attributes"]["title"].startswith("Apply: Strong"))
+        self.assertEqual((strong["deadline"], strong["tags"]), ((NOW.date() + timedelta(days=4)).isoformat(), ["Job hunt"]))
+        self.assertEqual(len(agent.job_deadlines({"job_tracker_db": db, "job_apply_tiers": ["Strong fit", "Long shot"]}, NOW)), 3)
+        self.assertEqual(agent.job_deadlines({"job_tracker_db": self.mail}, NOW), [])
+        self.assertEqual(agent.job_deadlines({"job_tracker_db": ""}, NOW), [])
+
+    def test_job_alerts_get_a_rolling_check_todo(self):
+        src = {"source": "Job alerts", "count": 4, "items": []}
+        (op, attrs), = agent.post_plan([src], {})
+        self.assertEqual((op, attrs["title"], attrs["tags"]), ("add", "Check Job alerts (4 new)", ["Job hunt"]))
+        self.assertIn("Junk", attrs["notes"])
+        self.assertTrue(agent.POST_TITLE.match("Check Job alerts (4 new)"))
 
     def test_wake_mail_starts_mail_only_when_closed(self):
         calls = []
