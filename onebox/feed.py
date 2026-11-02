@@ -54,9 +54,20 @@ def apply_actions(status: dict, actions: dict | None) -> dict:
     Ticks in the small-jobs pool or this week's deadlines drop out of those lists too."""
     rows = status.get("today") or []
     lists = {k: status[k] for k in ("pool", "week") if status.get(k)}
-    if not actions or not (rows or lists):
+    if not actions or not (rows or lists or status.get("later")):
         return status
     done, skip = set(actions.get("done", [])), list(actions.get("skip", []))
+    later = dict(actions.get("later") or {})
+    if later:  # Not today: out of Today now, and listed under Later with its new day until the Mac catches up
+        moved = {r.get("id"): {**r, "when": later[r.get("id")]} for r in rows if r.get("id") in later}
+        rest = [{**r, "when": later.get(r.get("id"), r.get("when"))}
+                for r in status.get("later") or [] if r.get("id") not in done and r.get("id") not in moved]
+        status = {**status, "later": sorted([*moved.values(), *rest], key=lambda r: r.get("when") or "9999")}
+        rows = [r for r in rows if r.get("id") not in moved]
+        status["left"] = max(0, int(status.get("left", 0)) - len(moved))
+        status["today"] = rows
+        if not rows and status.get("next_id") in moved:
+            status.update(next=None, next_kind=None, next_id=None)
     extra = {k: [r for r in v if r.get("id") not in done] for k, v in lists.items()}
     # an item can be in Today and in this week's list; count each tick once
     ticked = {r.get("id") for v in [rows, *lists.values()] for r in v if r.get("id") in done}
@@ -191,6 +202,7 @@ def post_summary(items: list[dict], now: datetime) -> list[dict]:
 
 POOL_MAX = 30
 WEEK_MAX = 10
+LATER_MAX = 80
 
 
 def _rows(rows: list[dict] | None, keys: tuple, limit: int) -> list[dict]:
@@ -232,4 +244,5 @@ def today(status: dict, xp: int, now: datetime, actions: dict | None = None,
     return {**build(status, xp, now, pal=pal), "items": items, "pillars": life,
             "week": _rows(status.get("week"), ("id", "due"), WEEK_MAX),
             "pool": _rows(status.get("pool"), ("id", "project", "errand", "quick", "someday"), POOL_MAX),
+            "later": _rows(status.get("later"), ("id", "when", "due"), LATER_MAX),
             "post": post or []}

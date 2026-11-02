@@ -216,11 +216,12 @@ class Store:
     # --- to-dos ticked or skipped on the watch or phone ------------------
 
     def todo_action(self, uuid: str, action: str, day: str) -> None:
-        """done: hide it now, and the Mac completes it in Things. skip: move it to the end until `day` ends."""
+        """done: hide it now, and the Mac completes it in Things. skip: move it to the end until `day` ends.
+        later: `day` is the day it should come back; it leaves Today now and the Mac moves it in Things."""
         with self.lock:
             self.db.execute(
                 """INSERT INTO todo_actions (uuid, action, day, at) VALUES (?, ?, ?, ?)
-                   ON CONFLICT(uuid, action) DO UPDATE SET day=excluded.day, at=excluded.at""",
+                   ON CONFLICT(uuid, action) DO UPDATE SET day=excluded.day, at=excluded.at, synced_at=NULL""",
                 (uuid, action, day, now_iso()))
             self.db.commit()
 
@@ -231,18 +232,27 @@ class Store:
                 "SELECT uuid FROM todo_actions WHERE action='done' AND uuid NOT IN (SELECT uuid FROM completed)")]
             skip = [r[0] for r in self.db.execute(
                 "SELECT uuid FROM todo_actions WHERE action='skip' AND day=? ORDER BY at", (day,))]
-        return {"done": done, "skip": skip}
+            later = {r[0]: r[1] for r in self.db.execute(
+                """SELECT uuid, day FROM todo_actions WHERE action='later' AND day>?
+                   AND uuid NOT IN (SELECT uuid FROM todo_actions WHERE action='done')""", (day,))}
+        return {"done": done, "skip": skip, "later": later}
 
     def todo_outbox(self) -> list[str]:
         with self.lock:
             return [r[0] for r in self.db.execute(
                 "SELECT uuid FROM todo_actions WHERE action='done' AND synced_at IS NULL ORDER BY at")]
 
+    def later_outbox(self) -> list[dict]:
+        """To-dos pushed to another day that the Mac hasn't moved in Things yet: [{"id", "when"}]."""
+        with self.lock:
+            return [{"id": r[0], "when": r[1]} for r in self.db.execute(
+                "SELECT uuid, day FROM todo_actions WHERE action='later' AND synced_at IS NULL ORDER BY at")]
+
     def ack_todos(self, uuids: list[str]) -> int:
         ts = now_iso()
         with self.lock:
-            n = sum(self.db.execute("UPDATE todo_actions SET synced_at=? WHERE uuid=? AND action='done'",
-                                    (ts, u)).rowcount for u in uuids)
+            n = sum(self.db.execute("""UPDATE todo_actions SET synced_at=? WHERE uuid=? AND action IN ('done', 'later')
+                                       AND synced_at IS NULL""", (ts, u)).rowcount for u in uuids)
             self.db.commit()
         return n
 

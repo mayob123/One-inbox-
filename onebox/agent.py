@@ -287,6 +287,7 @@ def tags_col(con) -> str:
 
 
 TODAY_MAX = 40  # enough for any real Today list, and keeps the phone feed small
+LATER_MAX = 80  # open to-dos outside Today that the phone lists under Later and by pillar
 
 # Small, never-urgent jobs the phone offers as side quests: anything in these projects, or with these tags,
 # that sits in Anytime or Someday without a date.
@@ -368,6 +369,17 @@ def things_status(db_path: str, now: datetime) -> dict:
                LEFT JOIN TMArea pa ON pa.uuid = p.area
                WHERE t.type = 0 AND t.status = 0 AND t.trashed = 0 AND t.start IN (1, 2) AND t.startDate IS NULL
                ORDER BY t.start, t.title""").fetchall()
+        later_rows = con.execute(
+            f"""SELECT t.uuid, t.title, t.startDate, t.deadline, COALESCE(a.title, pa.title, '') AS area,
+                       COALESCE(p.title, '') AS project, {tags_col(con)}
+               FROM TMTask t
+               LEFT JOIN TMArea a ON a.uuid = t.area
+               LEFT JOIN TMTask p ON p.uuid = t.project
+               LEFT JOIN TMArea pa ON pa.uuid = p.area
+               WHERE t.type = 0 AND t.status = 0 AND t.trashed = 0 AND {not_today}
+                 AND NOT (t.start = 2 AND t.startDate IS NULL)
+               ORDER BY t.startDate IS NULL, t.startDate, t.deadline IS NULL, t.deadline, t.title""",
+            (t_today,)).fetchall()
         checks = con.execute(
             """SELECT title, stopDate FROM TMTask WHERE type = 0 AND status = 3 AND trashed = 0
                AND stopDate >= ? AND title LIKE 'Check%'""", (midnight - 3 * 86400,)).fetchall()
@@ -415,6 +427,13 @@ def things_status(db_path: str, now: datetime) -> dict:
         "week": [{"id": r["uuid"], "title": r["title"], "due": from_things_date(r["deadline"]).isoformat(),
                   "kind": kind_of(r["title"], r["area"], r["project"], tags=r["tags"])} for r in week_rows[:10]],
         "pool": pool[:30],
+        # Everything else that's open and not parked in Someday: Anytime, Upcoming, the Inbox. The phone's
+        # pillar views and its Later list read this, so a Danish to-do shows even when it isn't in Today.
+        "later": [{"id": r["uuid"], "title": r["title"],
+                   "kind": kind_of(r["title"], r["area"], r["project"], tags=r["tags"]),
+                   "when": from_things_date(r["startDate"]).isoformat() if r["startDate"] else None,
+                   "due": from_things_date(r["deadline"]).isoformat() if r["deadline"] else None}
+                  for r in later_rows[:LATER_MAX]],
         "post_done": post_done,
     }
 
@@ -687,6 +706,9 @@ def things_query(params: dict) -> str:
     return urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
 
 
+THINGS_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
 def things_done_url(uuid: str, auth_token: str) -> str:
     """Things needs its own auth token (Settings > General > Enable Things URLs) to change a to-do."""
     return "things:///update?" + things_query({"id": uuid, "completed": "true", "auth-token": auth_token})
@@ -695,18 +717,22 @@ def things_done_url(uuid: str, auth_token: str) -> str:
 def complete_in_things(cfg: dict, dry_run: bool = False) -> int | str:
     """Tick off in Things what Ben marked done on the watch or phone."""
     try:
-        ids = call(cfg["server"], cfg["token"], "GET", "/api/todo/outbox").get("ids", [])
+        box = call(cfg["server"], cfg["token"], "GET", "/api/todo/outbox")
     except urllib.error.HTTPError as e:  # a Pi that hasn't been updated yet
         return f"Pi has no /api/todo/outbox yet ({e.code}). Update it with install-pi.sh."
-    if not ids:
+    ids = box.get("ids", [])
+    later = [m for m in box.get("later") or [] if m.get("id") and THINGS_DAY.fullmatch(str(m.get("when") or ""))]
+    if not ids and not later:
         return 0
     token = cfg.get("things_auth_token", "")
     if not token:
-        return f"{len(ids)} waiting: add things_auth_token to agent.json (see docs/setup.md)"
+        return f"{len(ids) + len(later)} waiting: add things_auth_token to agent.json (see docs/setup.md)"
     for uuid in ids:
         subprocess.run(["open", "-g", things_done_url(uuid, token)], check=True)
-    call(cfg["server"], cfg["token"], "POST", "/api/todo/ack", {"ids": ids})
-    return len(ids)
+    for m in later:  # Not today on the phone: Things shows it again on that day
+        subprocess.run(["open", "-g", things_update_url(m["id"], token, when=m["when"])], check=True)
+    call(cfg["server"], cfg["token"], "POST", "/api/todo/ack", {"ids": [*ids, *(m["id"] for m in later)]})
+    return len(ids) + len(later)
 
 
 TAGGED = Path.home() / ".config" / "onebox" / "tagged.json"

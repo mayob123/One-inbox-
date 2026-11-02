@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta
 import tempfile
 import threading
 import unittest
@@ -216,6 +217,33 @@ class ServerTests(unittest.TestCase):
                             "next_id": "uuidB", "today": rows[1:], "completed_ids": ["uuidA"]})
         f = json.loads(self.web.req(self.base, "GET", "/feed/watch.json", headers=W)[1])
         self.assertEqual((f["now_id"], f["left"], f["done"], f["xp"]), ("uuidC", 2, 1, 1))
+
+    def test_todo_later_leaves_today_and_comes_back(self):
+        W = {"X-OneInbox-Token": "w" * 20}
+        C = {"Authorization": "Bearer " + "c" * 20}
+        rows = [{"id": "uuidA", "title": "Danish homework", "kind": "danish", "due": None},
+                {"id": "uuidB", "title": "Pay phone bill", "kind": "bill", "due": None}]
+        later = [{"id": "uuidL", "title": "Quizlet deck", "kind": "danish", "when": None, "due": None}]
+        self.ingest(things={"left": 2, "done_today": 0, "next": "Danish homework", "next_kind": "danish",
+                            "next_id": "uuidA", "today": rows, "later": later, "completed_ids": []})
+        day = datetime.now(Config(ENV).tz).date()
+        tomorrow = (day + timedelta(days=1)).isoformat()
+        self.assertEqual(self.web.req(self.base, "POST", "/api/todo/later", {"id": "uuidA", "when": tomorrow})[0], 401)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/todo/later", {"id": "uuidA"}, C)[0], 400)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/todo/later",
+                                      {"id": "uuidA", "when": day.isoformat()}, C)[0], 400)
+        code, raw = self.web.req(self.base, "POST", "/api/todo/later", {"id": "uuidA", "when": tomorrow}, C)
+        self.assertEqual(code, 200)
+        self.assertEqual((json.loads(raw)["now_id"], json.loads(raw)["left"], json.loads(raw)["done"]), ("uuidB", 1, 0))
+        f = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers=W)[1])
+        self.assertEqual([i["id"] for i in f["items"]], ["uuidB"])
+        self.assertEqual([(r["id"], r.get("when")) for r in f["later"]], [("uuidA", tomorrow), ("uuidL", None)])
+        # An item already outside Today can be pushed to a day too.
+        self.assertEqual(self.web.req(self.base, "POST", "/api/todo/later", {"id": "uuidL", "when": tomorrow}, C)[0], 200)
+        box = json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])
+        self.assertEqual((box["ids"], box["later"]), ([], [{"id": "uuidA", "when": tomorrow}, {"id": "uuidL", "when": tomorrow}]))
+        self.web.req(self.base, "POST", "/api/todo/ack", {"ids": ["uuidA", "uuidL"]}, self.agent)
+        self.assertEqual(json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])["later"], [])
 
     def test_today_feed_has_pillars_with_waiting_mail(self):
         self.ingest(things={"left": 0, "pillars": {"bill": {"done_week": 1, "open": 2}}})
