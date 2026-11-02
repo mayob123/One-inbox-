@@ -266,6 +266,12 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(code, 201)
         new = json.loads(raw)["task"]
         self.assertEqual((new["source"], new["when"], new["list"]), ("app", tomorrow, "upcoming"))
+        errand = json.loads(self.web.req(self.base, "POST", "/api/tasks", {
+            "title": "Buy bulbs", "kind": "admin", "list": "anytime", "tags": ["Home admin", "Errands"],
+            "project": "Around the house"}, C)[1])["task"]
+        self.assertEqual((errand["tags"], errand["project"]), (["Home admin", "Errands"], "Around the house"))
+        self.assertEqual(self.web.req(self.base, "POST", "/api/tasks", {"title": "x", "tags": "Errands"}, C)[0], 400)
+        self.web.req(self.base, "POST", f"/api/tasks/{errand['id']}/done", {}, C)
         self.assertEqual(self.web.req(self.base, "POST", "/api/tasks", {"title": " "}, C)[0], 400)
         self.assertEqual(self.web.req(self.base, "POST", "/api/tasks", {"title": "x", "kind": "nope"}, C)[0], 400)
         self.assertEqual(self.web.req(self.base, "POST", f"/api/tasks/{new['id']}", {"title": "Book the PD3 exam"}, C)[0], 200)
@@ -287,7 +293,7 @@ class ServerTests(unittest.TestCase):
         self.ingest(things={"left": 0, "all": [dict(everything[1], list="upcoming", when=tomorrow)],
                             "completed_ids": ["A"]})
         self.assertEqual([(t["id"], t["status"]) for t in json.loads(self.web.req(
-            self.base, "GET", "/api/tasks?status=done", headers=C)[1])["tasks"]], [("A", "done")])
+            self.base, "GET", "/api/tasks?status=done", headers=C)[1])["tasks"]], [("A", "done"), (errand["id"], "done")])
         self.assertEqual(self.store.task("C")["status"], "gone")
         open_ids = [t["id"] for t in json.loads(self.web.req(self.base, "GET", "/api/tasks", headers=C)[1])["tasks"]]
         self.assertEqual(sorted(open_ids), sorted(["B", new["id"]]))

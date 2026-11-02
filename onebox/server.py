@@ -2,7 +2,7 @@
 
 Run:  python3 -m onebox.server
 Config comes from environment variables (see docs/setup.md):
-  ONEBOX_DB, ONEBOX_HOST, ONEBOX_PORT, ONEBOX_TZ,
+  ONEBOX_DB, ONEBOX_BACKUPS, ONEBOX_HOST, ONEBOX_PORT, ONEBOX_TZ,
   ONEBOX_UI_KEY, ONEBOX_AGENT_TOKEN, ONEBOX_WATCH_TOKEN, ONEBOX_CAPTURE_TOKEN (optional),
   PIHOLE_URL and PIHOLE_PASSWORD (optional, for Pocket Pal's PC)
 """
@@ -14,6 +14,7 @@ import hmac
 import json
 import os
 import re
+import threading
 from collections import Counter
 from datetime import date, datetime, timedelta
 from http import cookies
@@ -37,6 +38,8 @@ LATER_MAX_DAYS = 366  # how far ahead Not today can push a to-do
 class Config:
     def __init__(self, env=os.environ):
         self.db = env.get("ONEBOX_DB", "onebox.sqlite3")
+        # nightly copies of the database, the to-do list's safety net (14 kept)
+        self.backups = env.get("ONEBOX_BACKUPS") or str(Path(self.db).resolve().parent / "backups")
         self.host = env.get("ONEBOX_HOST", "127.0.0.1")
         self.port = int(env.get("ONEBOX_PORT", "8787"))
         self.tz = ZoneInfo(env.get("ONEBOX_TZ", "Europe/Copenhagen"))
@@ -355,6 +358,14 @@ def task_fields(body: dict, today: date, new: bool = False) -> dict:
             out[col] = (today + timedelta(days=1)).isoformat()
         else:
             out[col] = date.fromisoformat(str(v)).isoformat()
+    if "project" in body:
+        project = body.get("project")
+        out["project"] = str(project).strip()[:100] or None if project else None
+    if "tags" in body:
+        tags = body.get("tags") or []
+        if not isinstance(tags, list) or len(tags) > 10:
+            raise ValueError("tags must be a list of up to 10 names")
+        out["tags"] = [str(t).strip()[:40] for t in tags if str(t).strip()]
     if "list" in body:
         if body["list"] not in TASK_LISTS:
             raise ValueError("list must be one of " + ", ".join(sorted(TASK_LISTS)))
@@ -365,9 +376,24 @@ def task_fields(body: dict, today: date, new: bool = False) -> dict:
     return out
 
 
+def backup_loop(cfg: Config, store: Store, stop: threading.Event | None = None) -> None:
+    """Back the database up once a day: checks hourly, writes when the day's copy is missing."""
+    stop = stop or threading.Event()
+    while True:
+        try:
+            made = store.backup(cfg.backups, datetime.now(cfg.tz).date().isoformat())
+            if made:
+                print(f"One Inbox backup: {made}", flush=True)
+        except Exception as e:  # a full disk mustn't take the server down
+            print(f"One Inbox backup failed: {e}", flush=True)
+        if stop.wait(3600):
+            return
+
+
 def main() -> None:
     cfg = Config()
     store = Store(cfg.db)
+    threading.Thread(target=backup_loop, args=(cfg, store), daemon=True).start()
     httpd = ThreadingHTTPServer((cfg.host, cfg.port), make_handler(cfg, store))
     print(f"One Inbox listening on http://{cfg.host}:{cfg.port}")
     httpd.serve_forever()

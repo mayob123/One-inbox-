@@ -30,6 +30,8 @@ The script creates a `onebox` system user, puts the app in `/opt/one-inbox`, wri
 
 Update later with `git pull && sudo ./deploy/install-pi.sh` (keys are kept). Logs: `journalctl -u onebox -f`.
 
+**Backups.** Once a day the server copies its whole database (your to-do list included) to `/var/lib/onebox/backups/onebox-YYYY-MM-DD.sqlite3` and keeps the newest 14. Set `ONEBOX_BACKUPS` in /etc/onebox.env to put them somewhere else the `onebox` user can write. To restore one: `sudo systemctl stop onebox`, copy it over `/var/lib/onebox/onebox.sqlite3` (as the `onebox` user), then `sudo systemctl start onebox`.
+
 Pi-hole uses ports 80 and 53, so One Inbox stays on 8787 and does not clash.
 
 ## 2. A home name with Pi-hole
