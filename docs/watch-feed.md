@@ -152,6 +152,6 @@ The Mac sends `things.all` on each sync: every open Things to-do, Someday includ
 All with `Authorization: Bearer <ONEBOX_CAPTURE_TOKEN>` (or the page cookie):
 
 - `GET /api/tasks[?status=open|done|gone]` → `{"tasks": [{id, source, title, kind, list, when, due, tags, project, area, notes, status, created_at, updated_at, done_at}], "last_sync"}`, dated ones first. Empty fields are left out.
-- `POST /api/tasks` `{title, kind?, when?, due?, notes?, list?}` → `201 {"ok", "task"}`. Kept on the Pi only. `when`/`due` are ISO days or `today`/`tomorrow`; without `list` it's today, upcoming or anytime from `when`.
+- `POST /api/tasks` `{title, kind?, when?, due?, notes?, list?, tags?, project?}` → `201 {"ok", "task"}`. Kept on the Pi only. `when`/`due` are ISO days or `today`/`tomorrow`; without `list` it's today, upcoming or anytime from `when`.
 - `POST /api/tasks/<id>` with any of those fields edits an app to-do. A Things to-do answers `409`: change it in Things for now.
 - `POST /api/tasks/<id>/done` and `POST /api/tasks/<id>/later {when}`: for a Things to-do these go through the todo outbox, so the Mac completes or moves it in Things, and the Pi's copy shows the change at once (a stale sync doesn't undo it). `404` when there's no open to-do with that id.

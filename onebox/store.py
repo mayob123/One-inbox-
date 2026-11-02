@@ -370,10 +370,12 @@ class Store:
         tid = "pp-" + secrets.token_hex(6)
         with self.lock:
             self.db.execute(
-                """INSERT INTO tasks (id, source, title, notes, kind, list, when_day, due, tags, status, created_at, updated_at)
-                   VALUES (?, 'app', ?, ?, ?, ?, ?, ?, '[]', 'open', ?, ?)""",
+                """INSERT INTO tasks (id, source, title, notes, kind, list, when_day, due, tags, project, status,
+                                      created_at, updated_at)
+                   VALUES (?, 'app', ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)""",
                 (tid, fields["title"], fields.get("notes"), fields.get("kind"), fields.get("list"),
-                 fields.get("when_day"), fields.get("due"), ts, ts))
+                 fields.get("when_day"), fields.get("due"), json.dumps(fields.get("tags") or []),
+                 fields.get("project"), ts, ts))
             self.db.commit()
         return self.task(tid)
 
@@ -385,6 +387,8 @@ class Store:
         if cur["source"] != "app":
             return "things"
         sets = {k: v for k, v in fields.items() if k in self.TASK_FIELDS}
+        if "tags" in fields:
+            sets["tags"] = json.dumps(fields["tags"] or [])
         if not sets:
             return "ok"
         with self.lock:

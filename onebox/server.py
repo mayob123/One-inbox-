@@ -358,6 +358,14 @@ def task_fields(body: dict, today: date, new: bool = False) -> dict:
             out[col] = (today + timedelta(days=1)).isoformat()
         else:
             out[col] = date.fromisoformat(str(v)).isoformat()
+    if "project" in body:
+        project = body.get("project")
+        out["project"] = str(project).strip()[:100] or None if project else None
+    if "tags" in body:
+        tags = body.get("tags") or []
+        if not isinstance(tags, list) or len(tags) > 10:
+            raise ValueError("tags must be a list of up to 10 names")
+        out["tags"] = [str(t).strip()[:40] for t in tags if str(t).strip()]
     if "list" in body:
         if body["list"] not in TASK_LISTS:
             raise ValueError("list must be one of " + ", ".join(sorted(TASK_LISTS)))
