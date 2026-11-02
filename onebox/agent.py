@@ -465,7 +465,10 @@ def things_all(db_path: str, now: datetime) -> list[dict]:
         con.close()
     out = []
     for r in rows:
-        if r["startDate"] is not None and r["startDate"] <= t_today and r["start"] != 0:
+        # Today exactly as Things' Today list (and the feed's items): Anytime with a start day that's come.
+        # A scheduled one whose day has come but Things hasn't moved yet stays Upcoming, so the phone shows
+        # it under This week instead of filling Today.
+        if r["startDate"] is not None and r["startDate"] <= t_today and r["start"] == 1:
             where = "today"
         elif r["startDate"] is not None:
             where = "upcoming"

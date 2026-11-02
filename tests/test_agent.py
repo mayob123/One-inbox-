@@ -179,6 +179,14 @@ class AgentTests(unittest.TestCase):
         self.assertEqual((rows["t3"]["list"], rows["t3"]["when"]), ("someday", None))
         self.assertEqual((rows["t4"]["list"], rows["t4"]["when"]), ("upcoming", (NOW.date() + timedelta(days=5)).isoformat()))
         self.assertEqual(rows["t2"]["due"], (NOW.date() + timedelta(days=3)).isoformat())
+        # Scheduled (Someday bucket with a day) whose day has come: Upcoming, not Today, like the feed.
+        con = sqlite3.connect(self.things)
+        con.execute("UPDATE TMTask SET start = 2, startDate = ? WHERE uuid = 't1'",
+                    (agent.things_date(NOW.date() - timedelta(days=1)),))
+        con.commit()
+        con.close()
+        row = {r["id"]: r for r in agent.things_all(self.things, NOW)}["t1"]
+        self.assertEqual(row["list"], "upcoming")
 
     def test_dry_run_end_to_end(self):
         report = agent.run_once({"mail_db": self.mail, "things_db": self.things, "days": 21,
