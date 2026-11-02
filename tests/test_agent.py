@@ -5,6 +5,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 import urllib.parse
 from datetime import date, datetime, timedelta, timezone
 
@@ -145,6 +146,30 @@ class AgentTests(unittest.TestCase):
         self.assertEqual([t["title"] for t in s["today"]][0], "Danish homework, chapter 4")
         self.assertEqual(len(s["today"]), 2)
         self.assertEqual(s["today"][0]["kind"], "danish")
+
+    def test_things_status_lists_later(self):
+        s = agent.things_status(self.things, NOW)
+        # t4 is scheduled for +5 days (Upcoming); t3 sits in Someday and stays out.
+        self.assertEqual([(r["id"], r["when"]) for r in s["later"]],
+                         [("t4", (NOW.date() + timedelta(days=5)).isoformat())])
+
+    def test_not_today_moves_the_todo_in_things(self):
+        cfg = {"server": "http://pi", "token": "t", "things_auth_token": "AUTH"}
+        calls, opened = [], []
+
+        def fake_call(server, token, method, path, body=None):
+            calls.append((method, path, body))
+            return {"ids": ["d1"], "later": [{"id": "l1", "when": "2026-11-03"}, {"id": "bad", "when": "soon"}]} \
+                if method == "GET" else {}
+
+        with mock.patch.object(agent, "call", fake_call), \
+                mock.patch.object(agent.subprocess, "run", lambda args, check: opened.append(args[-1])):
+            self.assertEqual(agent.complete_in_things(cfg), 2)
+        self.assertIn("id=d1", opened[0])
+        self.assertIn("completed=true", opened[0])
+        self.assertIn("id=l1", opened[1])
+        self.assertIn("when=2026-11-03", opened[1])
+        self.assertEqual(calls[-1], ("POST", "/api/todo/ack", {"ids": ["d1", "l1"]}))
 
     def test_dry_run_end_to_end(self):
         report = agent.run_once({"mail_db": self.mail, "things_db": self.things, "days": 21,

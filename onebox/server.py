@@ -15,7 +15,7 @@ import json
 import os
 import re
 from collections import Counter
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,6 +31,7 @@ WEB_DIR = Path(__file__).parent / "web"
 COOKIE = "onebox_key"
 MAX_BODY = 2_000_000
 MAX_CAPTURE = 500
+LATER_MAX_DAYS = 366  # how far ahead Not today can push a to-do
 
 
 class Config:
@@ -171,7 +172,7 @@ def make_handler(cfg: Config, store: Store):
             if path == "/api/todo/outbox":
                 if not self._agent_ok():
                     return self._send(401)
-                return self._json(200, {"ids": store.todo_outbox()})
+                return self._json(200, {"ids": store.todo_outbox(), "later": store.later_outbox()})
             return self._send(404)
 
         def do_POST(self):
@@ -224,16 +225,27 @@ def make_handler(cfg: Config, store: Store):
                         if r.get("id") and (r.get("title") or "").startswith(f"Check {source} ("):
                             store.todo_action(r["id"], "done", self._now().date().isoformat())
                     return self._json(200, {"ok": True, "checked": n})
-                m = re.fullmatch(r"/api/todo/(done|skip)", path)
+                m = re.fullmatch(r"/api/todo/(done|skip|later)", path)
                 if m:
                     if not self._todo_ok():
                         return self._send(401)
-                    uuid = str(self._body().get("id") or "")
+                    body = self._body()
+                    uuid = str(body.get("id") or "")
                     status = store.get_meta("things_status", {})
-                    known = {r.get("id") for k in ("today", "pool", "week") for r in status.get(k) or []}
+                    known = {r.get("id") for k in ("today", "pool", "week", "later") for r in status.get(k) or []}
                     if uuid not in known:
                         return self._json(404, {"error": "Not in today's Things list."})
-                    store.todo_action(uuid, m.group(1), self._now().date().isoformat())
+                    day = self._now().date()
+                    if m.group(1) == "later":
+                        try:
+                            back = date.fromisoformat(str(body.get("when") or ""))
+                        except ValueError:
+                            return self._json(400, {"error": "when must be a date like 2026-11-03."})
+                        if not day < back <= day + timedelta(days=LATER_MAX_DAYS):
+                            return self._json(400, {"error": f"when must be after today and within {LATER_MAX_DAYS} days."})
+                        store.todo_action(uuid, "later", back.isoformat())
+                    else:
+                        store.todo_action(uuid, m.group(1), day.isoformat())
                     status = store.get_meta("things_status", {})
                     return self._json(200, {"ok": True, **feed.build(status, store.xp(), self._now(), self._todo_state())})
                 if path == "/api/pal":

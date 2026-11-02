@@ -43,9 +43,9 @@ class FeedTests(unittest.TestCase):
                             {"title": "x" * 200, "kind": "weird", "due": "2026-10-28"},
                             {"title": "  ", "kind": "other"}]}
         f = today(status, 5, NOON)
-        self.assertEqual({k: v for k, v in f.items() if k not in ("items", "pillars", "week", "pool", "post")},
+        self.assertEqual({k: v for k, v in f.items() if k not in ("items", "pillars", "week", "pool", "later", "post")},
                          build(status, 5, NOON))
-        self.assertEqual((f["week"], f["pool"], f["post"]), ([], [], []))
+        self.assertEqual((f["week"], f["pool"], f["later"], f["post"]), ([], [], [], []))
         self.assertEqual(f["items"][0], {"id": None, "title": "A-kasse hours", "kind": "admin", "due": None})
         self.assertEqual((len(f["items"]), len(f["items"][1]["title"]), f["items"][1]["kind"]), (2, 80, "other"))
         self.assertEqual(today({}, 0, NOON)["items"], [])

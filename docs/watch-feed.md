@@ -99,6 +99,11 @@ A to-do's kind comes from its Things tags first: one tag per Pocket Pal pillar (
 
 - **done**: the item drops out of both feeds immediately, `left` goes down, `done` and `xp` go up. On its next sync the Mac agent ticks it off in Things (needs `things_auth_token` in `agent.json`), and it is counted once.
 - **skip**: the item moves to the end of today's order until local midnight. Things is not changed. Skipping several keeps them in the order they were skipped.
+- **later** (Not today): `POST /api/todo/later` with `{"id": "<Things id>", "when": "YYYY-MM-DD"}`, a day after today and within a year (`400` otherwise). The item leaves Today at once (it isn't counted as done) and shows under `later` with its new day. On its next sync the Mac moves it in Things to that day (`things:///update?when=…`, needs `things_auth_token`), so it comes back in Today then. It also works on items from `week`, `pool` and `later`.
+
+`/feed/today.json` also has `later`: open to-dos outside Today that aren't parked in Someday (Anytime, Upcoming, the Inbox), up to 80, soonest `when` first. Each is `{id, title, kind, when, due}` (`when` and `due` are ISO days or absent). The phone uses it for its Later list and to show every to-do of a pillar, not just today's.
+
+`GET /api/todo/outbox` (agent token) returns `{"ids": [to complete], "later": [{"id", "when"}]}`; `POST /api/todo/ack` with `{"ids": [...]}` marks both kinds as done in Things.
 
 ## Shared Lyra state (phone → Pi → watch)
 
