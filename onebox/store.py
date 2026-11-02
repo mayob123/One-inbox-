@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -33,6 +34,23 @@ CREATE TABLE IF NOT EXISTS todo_actions (
   at TEXT NOT NULL,
   synced_at TEXT,
   PRIMARY KEY (uuid, action)
+);
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  title TEXT NOT NULL,
+  notes TEXT,
+  kind TEXT,
+  list TEXT,
+  when_day TEXT,
+  due TEXT,
+  tags TEXT,
+  project TEXT,
+  area TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  done_at TEXT
 );
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
@@ -255,6 +273,130 @@ class Store:
                                        AND synced_at IS NULL""", (ts, u)).rowcount for u in uuids)
             self.db.commit()
         return n
+
+    # --- tasks: every open to-do, kept on the Pi -----------------------------
+    # Phase 1 of moving the list into Pocket Pal: the Pi mirrors every open Things to-do (source "things")
+    # and can hold to-dos of its own (source "app"). Things is still where Things to-dos change: done and
+    # Not today on one go through todo_actions, so the Mac does them in Things as before.
+
+    TASK_FIELDS = ("title", "notes", "kind", "list", "when_day", "due", "project", "area")
+
+    def sync_things(self, rows: list[dict], completed: list[str] | None = None) -> dict:
+        """Mirror the Mac's full list of open Things to-dos (Someday included). One that has left the list is
+        done (completed in Things, or ticked here) or gone (deleted or cancelled in Things). A tick or a Not today
+        made here that the Mac hasn't carried out in Things yet wins over the older Things state."""
+        ts = now_iso()
+        seen = set()
+        with self.lock:
+            for r in rows:
+                uid = str(r.get("id") or "")
+                if not uid or not str(r.get("title") or "").strip():
+                    continue
+                seen.add(uid)
+                vals = (uid, str(r["title"])[:500], (r.get("notes") or None), r.get("kind"), r.get("list"),
+                        r.get("when"), r.get("due"), json.dumps(r.get("tags") or []), r.get("project"), r.get("area"))
+                self.db.execute(
+                    """INSERT INTO tasks (id, source, title, notes, kind, list, when_day, due, tags, project, area,
+                                          status, created_at, updated_at)
+                       VALUES (?, 'things', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+                       ON CONFLICT(id) DO UPDATE SET title=excluded.title, notes=COALESCE(excluded.notes, tasks.notes),
+                         kind=excluded.kind, due=excluded.due,
+                         tags=excluded.tags, project=excluded.project, area=excluded.area,
+                         list=CASE WHEN EXISTS (SELECT 1 FROM todo_actions a WHERE a.uuid=tasks.id
+                                  AND a.action='later' AND a.synced_at IS NULL) THEN tasks.list ELSE excluded.list END,
+                         when_day=CASE WHEN EXISTS (SELECT 1 FROM todo_actions a WHERE a.uuid=tasks.id
+                                  AND a.action='later' AND a.synced_at IS NULL) THEN tasks.when_day ELSE excluded.when_day END,
+                         status=CASE WHEN EXISTS (SELECT 1 FROM todo_actions a WHERE a.uuid=tasks.id AND a.action='done'
+                                  AND a.uuid NOT IN (SELECT uuid FROM completed)) THEN tasks.status ELSE 'open' END,
+                         done_at=CASE WHEN EXISTS (SELECT 1 FROM todo_actions a WHERE a.uuid=tasks.id AND a.action='done'
+                                  AND a.uuid NOT IN (SELECT uuid FROM completed)) THEN tasks.done_at ELSE NULL END,
+                         updated_at=excluded.updated_at
+                       WHERE tasks.source = 'things'""", (*vals, ts, ts))
+            done_ids = set(completed or []) | {r[0] for r in self.db.execute("SELECT uuid FROM completed")} \
+                | {r[0] for r in self.db.execute("SELECT uuid FROM todo_actions WHERE action='done'")}
+            left = [r[0] for r in self.db.execute("SELECT id FROM tasks WHERE source='things' AND status='open'")
+                    if r[0] not in seen]
+            for uid in left:
+                status = "done" if uid in done_ids else "gone"
+                self.db.execute("UPDATE tasks SET status=?, done_at=?, updated_at=? WHERE id=?",
+                                (status, ts if status == "done" else None, ts, uid))
+            self.db.commit()
+        return {"open": len(seen), "closed": len(left)}
+
+    @staticmethod
+    def _task(r: sqlite3.Row) -> dict:
+        d = {k: r[k] for k in ("id", "source", "title", "notes", "kind", "list", "due", "project", "area", "status",
+                               "created_at", "updated_at", "done_at")}
+        d["when"] = r["when_day"]
+        d["tags"] = json.loads(r["tags"] or "[]")
+        return {k: v for k, v in d.items() if v not in (None, [], "")}
+
+    def tasks(self, status: str = "open") -> list[dict]:
+        with self.lock:
+            rows = self.db.execute(
+                """SELECT * FROM tasks WHERE status=?
+                   ORDER BY when_day IS NULL, when_day, due IS NULL, due, created_at""", (status,)).fetchall()
+        return [self._task(r) for r in rows]
+
+    def task(self, task_id: str) -> dict | None:
+        with self.lock:
+            r = self.db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        return self._task(r) if r else None
+
+    def add_task(self, fields: dict) -> dict:
+        """A to-do made in Pocket Pal, kept on the Pi only (Things doesn't get it)."""
+        ts = now_iso()
+        tid = "pp-" + secrets.token_hex(6)
+        with self.lock:
+            self.db.execute(
+                """INSERT INTO tasks (id, source, title, notes, kind, list, when_day, due, tags, status, created_at, updated_at)
+                   VALUES (?, 'app', ?, ?, ?, ?, ?, ?, '[]', 'open', ?, ?)""",
+                (tid, fields["title"], fields.get("notes"), fields.get("kind"), fields.get("list"),
+                 fields.get("when_day"), fields.get("due"), ts, ts))
+            self.db.commit()
+        return self.task(tid)
+
+    def edit_task(self, task_id: str, fields: dict) -> str:
+        """Change a to-do made in the app. Returns "ok", "missing" or "things" (change those in Things for now)."""
+        cur = self.task(task_id)
+        if not cur:
+            return "missing"
+        if cur["source"] != "app":
+            return "things"
+        sets = {k: v for k, v in fields.items() if k in self.TASK_FIELDS}
+        if not sets:
+            return "ok"
+        with self.lock:
+            self.db.execute(f"UPDATE tasks SET {', '.join(f'{k}=?' for k in sets)}, updated_at=? WHERE id=?",
+                            (*sets.values(), now_iso(), task_id))
+            self.db.commit()
+        return "ok"
+
+    def finish_task(self, task_id: str, day: str) -> bool:
+        """Done. A Things to-do also goes to the Mac's outbox, which completes it in Things."""
+        cur = self.task(task_id)
+        if not cur or cur["status"] != "open":
+            return False
+        if cur["source"] == "things":
+            self.todo_action(task_id, "done", day)
+        ts = now_iso()
+        with self.lock:
+            self.db.execute("UPDATE tasks SET status='done', done_at=?, updated_at=? WHERE id=?", (ts, ts, task_id))
+            self.db.commit()
+        return True
+
+    def push_task(self, task_id: str, when: str) -> bool:
+        """Not today: set for `when`. A Things to-do is moved in Things by the Mac too."""
+        cur = self.task(task_id)
+        if not cur or cur["status"] != "open":
+            return False
+        if cur["source"] == "things":
+            self.todo_action(task_id, "later", when)
+        with self.lock:
+            self.db.execute("UPDATE tasks SET when_day=?, list='upcoming', updated_at=? WHERE id=?",
+                            (when, now_iso(), task_id))
+            self.db.commit()
+        return True
 
     # --- meta: last agent report ------------------------------------------
 

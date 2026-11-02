@@ -165,6 +165,13 @@ def make_handler(cfg: Config, store: Store):
                     "things": store.get_meta("things_status", {}),
                     "xp": store.xp(),
                 })
+            if path == "/api/tasks":
+                if not self._capture_ok():
+                    return self._send(401)
+                state = parse_qs(urlparse(self.path).query).get("status", ["open"])[0]
+                if state not in ("open", "done", "gone"):
+                    return self._json(400, {"error": "status is open, done or gone"})
+                return self._json(200, {"tasks": store.tasks(state), "last_sync": store.get_meta("last_sync")})
             if path == "/api/outbox":
                 if not self._agent_ok():
                     return self._send(401)
@@ -225,6 +232,33 @@ def make_handler(cfg: Config, store: Store):
                         if r.get("id") and (r.get("title") or "").startswith(f"Check {source} ("):
                             store.todo_action(r["id"], "done", self._now().date().isoformat())
                     return self._json(200, {"ok": True, "checked": n})
+                if path == "/api/tasks":
+                    if not self._capture_ok():
+                        return self._send(401)
+                    fields = task_fields(self._body(), self._now().date(), new=True)
+                    return self._json(201, {"ok": True, "task": store.add_task(fields)})
+                m = re.fullmatch(r"/api/tasks/([A-Za-z0-9-]{1,64})(?:/(done|later))?", path)
+                if m:
+                    if not self._capture_ok():
+                        return self._send(401)
+                    tid, action = m.group(1), m.group(2)
+                    body = self._body()
+                    day = self._now().date()
+                    if action == "done":
+                        ok = store.finish_task(tid, day.isoformat())
+                    elif action == "later":
+                        when = task_fields({"when": body.get("when")}, day).get("when_day")
+                        if not when or when <= day.isoformat():
+                            return self._json(400, {"error": "when must be a day after today"})
+                        ok = store.push_task(tid, when)
+                    else:
+                        result = store.edit_task(tid, task_fields(body, day))
+                        if result == "things":
+                            return self._json(409, {"error": "This one lives in Things for now: change it there."})
+                        ok = result == "ok"
+                    if not ok:
+                        return self._json(404, {"error": "No open to-do with that id."})
+                    return self._json(200, {"ok": True, "task": store.task(tid)})
                 m = re.fullmatch(r"/api/todo/(done|skip|later)", path)
                 if m:
                     if not self._todo_ok():
@@ -265,7 +299,11 @@ def make_handler(cfg: Config, store: Store):
                     n = store.upsert_items(body.get("items", []))
                     if "things" in body:
                         status = dict(body["things"])
-                        store.record_completed(status.pop("completed_ids", []))
+                        completed = status.pop("completed_ids", [])
+                        store.record_completed(completed)
+                        everything = status.pop("all", None)
+                        if isinstance(everything, list):  # an older Mac agent doesn't send it
+                            store.sync_things(everything, completed)
                         for source, at in (status.pop("post_done", None) or {}).items():
                             store.check_post(source, at)  # Ben ticked "Check Aula" in Things
                         store.set_meta("things_status", status)
@@ -280,6 +318,51 @@ def make_handler(cfg: Config, store: Store):
             return self._send(404)
 
     return Handler
+
+
+TASK_KINDS = {"bill", "school", "admin", "msc", "job", "danish", "friend", "body", "travel", "other"}
+TASK_LISTS = {"inbox", "today", "upcoming", "anytime", "someday"}
+
+
+def task_fields(body: dict, today: date, new: bool = False) -> dict:
+    """Check a to-do sent by the phone and turn it into store fields. Raises ValueError (a 400) when it's wrong.
+    `when` and `due` are ISO days ("2026-11-03"), or "today" / "tomorrow"; null clears them."""
+    if not isinstance(body, dict):
+        raise ValueError("send a JSON object")
+    out: dict = {}
+    if new or "title" in body:
+        title = str(body.get("title") or "").strip()
+        if not title or len(title) > MAX_CAPTURE:
+            raise ValueError(f"title must be 1 to {MAX_CAPTURE} characters")
+        out["title"] = title
+    if "notes" in body:
+        notes = body.get("notes")
+        out["notes"] = str(notes)[:4000] if notes else None
+    if "kind" in body or new:
+        kind = body.get("kind") or "other"
+        if kind not in TASK_KINDS:
+            raise ValueError("kind must be one of " + ", ".join(sorted(TASK_KINDS)))
+        out["kind"] = kind
+    for key, col in (("when", "when_day"), ("due", "due")):
+        if key not in body:
+            continue
+        v = body.get(key)
+        if v in (None, ""):
+            out[col] = None
+        elif v == "today":
+            out[col] = today.isoformat()
+        elif v == "tomorrow":
+            out[col] = (today + timedelta(days=1)).isoformat()
+        else:
+            out[col] = date.fromisoformat(str(v)).isoformat()
+    if "list" in body:
+        if body["list"] not in TASK_LISTS:
+            raise ValueError("list must be one of " + ", ".join(sorted(TASK_LISTS)))
+        out["list"] = body["list"]
+    elif new:
+        w = out.get("when_day")
+        out["list"] = "anytime" if not w else "today" if w <= today.isoformat() else "upcoming"
+    return out
 
 
 def main() -> None:

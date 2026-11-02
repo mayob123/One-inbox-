@@ -245,6 +245,58 @@ class ServerTests(unittest.TestCase):
         self.web.req(self.base, "POST", "/api/todo/ack", {"ids": ["uuidA", "uuidL"]}, self.agent)
         self.assertEqual(json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])["later"], [])
 
+    def test_tasks_mirror_things_and_hold_app_todos(self):
+        C = {"Authorization": "Bearer " + "c" * 20}
+        day = datetime.now(Config(ENV).tz).date()
+        tomorrow = (day + timedelta(days=1)).isoformat()
+        everything = [
+            {"id": "A", "title": "Danish homework", "kind": "danish", "list": "today", "when": day.isoformat()},
+            {"id": "B", "title": "Quizlet deck", "kind": "danish", "list": "anytime", "tags": ["Danish"]},
+            {"id": "C", "title": "Learn Python", "kind": "msc", "list": "someday"}]
+        self.ingest(things={"left": 1, "today": everything[:1], "all": everything, "completed_ids": []})
+        self.assertNotIn("all", self.store.get_meta("things_status"))  # kept in its own table, not the meta blob
+        self.assertEqual(self.web.req(self.base, "GET", "/api/tasks")[0], 401)
+        tasks = json.loads(self.web.req(self.base, "GET", "/api/tasks", headers=C)[1])["tasks"]
+        self.assertEqual([(t["id"], t["source"], t.get("list")) for t in tasks],
+                         [("A", "things", "today"), ("B", "things", "anytime"), ("C", "things", "someday")])
+        self.assertEqual(tasks[1]["tags"], ["Danish"])
+        # A to-do made in the app lives on the Pi only.
+        code, raw = self.web.req(self.base, "POST", "/api/tasks", {"title": "Book PD3 exam", "kind": "danish",
+                                                                    "when": "tomorrow"}, C)
+        self.assertEqual(code, 201)
+        new = json.loads(raw)["task"]
+        self.assertEqual((new["source"], new["when"], new["list"]), ("app", tomorrow, "upcoming"))
+        self.assertEqual(self.web.req(self.base, "POST", "/api/tasks", {"title": " "}, C)[0], 400)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/tasks", {"title": "x", "kind": "nope"}, C)[0], 400)
+        self.assertEqual(self.web.req(self.base, "POST", f"/api/tasks/{new['id']}", {"title": "Book the PD3 exam"}, C)[0], 200)
+        self.assertEqual(self.store.task(new["id"])["title"], "Book the PD3 exam")
+        # Things to-dos are changed in Things for now; done and Not today go through the Mac.
+        self.assertEqual(self.web.req(self.base, "POST", "/api/tasks/B", {"title": "x"}, C)[0], 409)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/tasks/B/later", {"when": tomorrow}, C)[0], 200)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/tasks/B/later", {"when": day.isoformat()}, C)[0], 400)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/tasks/A/done", {}, C)[0], 200)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/tasks/A/done", {}, C)[0], 404)
+        box = json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])
+        self.assertEqual((box["ids"], box["later"]), (["A"], [{"id": "B", "when": tomorrow}]))
+        # The next sync still shows the old Things state: the tick and the new day here win until the Mac acts.
+        self.ingest(things={"left": 1, "all": everything, "completed_ids": []})
+        self.assertEqual(self.store.task("A")["status"], "done")
+        self.assertEqual(self.store.task("B")["when"], tomorrow)
+        # The Mac did both; Things reports A completed, and C was deleted in Things.
+        self.web.req(self.base, "POST", "/api/todo/ack", {"ids": ["A", "B"]}, self.agent)
+        self.ingest(things={"left": 0, "all": [dict(everything[1], list="upcoming", when=tomorrow)],
+                            "completed_ids": ["A"]})
+        self.assertEqual([(t["id"], t["status"]) for t in json.loads(self.web.req(
+            self.base, "GET", "/api/tasks?status=done", headers=C)[1])["tasks"]], [("A", "done")])
+        self.assertEqual(self.store.task("C")["status"], "gone")
+        open_ids = [t["id"] for t in json.loads(self.web.req(self.base, "GET", "/api/tasks", headers=C)[1])["tasks"]]
+        self.assertEqual(sorted(open_ids), sorted(["B", new["id"]]))
+        # An older agent that sends no full list leaves the mirror alone.
+        self.ingest(things={"left": 0, "completed_ids": []})
+        self.assertEqual(self.store.task("B")["status"], "open")
+        self.web.req(self.base, "POST", f"/api/tasks/{new['id']}/done", {}, C)
+        self.assertEqual(json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])["ids"], [])
+
     def test_today_feed_has_pillars_with_waiting_mail(self):
         self.ingest(things={"left": 0, "pillars": {"bill": {"done_week": 1, "open": 2}}})
         code, raw = self.web.req(self.base, "GET", "/feed/today.json", headers={"X-OneInbox-Token": "w" * 20})

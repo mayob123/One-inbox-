@@ -144,3 +144,14 @@ Added 2026-10-28. `today.json` also carries:
 - `post`: unread official post per source, `[{"source": "Aula", "count": 3, "since": iso, "latest": "…", "items": [{"id", "title", "received"}]}]`. Alerts stop counting when checked or after 14 days.
 
 `POST /api/todo/done` accepts ids from `pool` and `week` too. `POST /api/post/checked` with `{"source": "Aula"}` (watch or capture token) marks that source's alerts as checked and ticks its "Check Aula (n new)" to-do. `GET /api/post` (agent, watch or capture token) returns `{"sources": [...as post above]}`. Official post no longer shows in `/api/waiting` or `waiting_mail`. `watch.json` is unchanged.
+
+## Every to-do on the Pi (phase 1 of moving the list into Pocket Pal)
+
+The Mac sends `things.all` on each sync: every open Things to-do, Someday included, as `{id, title, kind, list, when, due, tags, project, area}` (`list` is inbox, today, upcoming, anytime or someday; no notes). The Pi keeps them in its `tasks` table (source `things`) next to to-dos made in the app (source `app`, ids `pp-…`). A Things to-do that leaves the list becomes `done` (completed in Things, or ticked here) or `gone` (deleted or cancelled). An older agent without `all` leaves the table alone. Nothing reads this yet except the API below; today.json and the watch feed are unchanged.
+
+All with `Authorization: Bearer <ONEBOX_CAPTURE_TOKEN>` (or the page cookie):
+
+- `GET /api/tasks[?status=open|done|gone]` → `{"tasks": [{id, source, title, kind, list, when, due, tags, project, area, notes, status, created_at, updated_at, done_at}], "last_sync"}`, dated ones first. Empty fields are left out.
+- `POST /api/tasks` `{title, kind?, when?, due?, notes?, list?}` → `201 {"ok", "task"}`. Kept on the Pi only. `when`/`due` are ISO days or `today`/`tomorrow`; without `list` it's today, upcoming or anytime from `when`.
+- `POST /api/tasks/<id>` with any of those fields edits an app to-do. A Things to-do answers `409`: change it in Things for now.
+- `POST /api/tasks/<id>/done` and `POST /api/tasks/<id>/later {when}`: for a Things to-do these go through the todo outbox, so the Mac completes or moves it in Things, and the Pi's copy shows the change at once (a stale sync doesn't undo it). `404` when there's no open to-do with that id.
