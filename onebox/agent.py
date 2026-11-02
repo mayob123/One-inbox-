@@ -438,6 +438,49 @@ def things_status(db_path: str, now: datetime) -> dict:
     }
 
 
+# --- Every open to-do, for the Pi's own list (phase 1 of moving it into Pocket Pal) ---
+
+ALL_MAX = 1000  # far more than anyone keeps open; only a guard against a runaway list
+TAG_SPLIT = re.compile(r"\s*\|\s*")
+
+
+def things_all(db_path: str, now: datetime) -> list[dict]:
+    """Every open to-do in Things, Someday included: id, title, kind, list (inbox, today, upcoming, anytime,
+    someday), when and due (ISO days), tags, project and area. Notes are left out to keep it small."""
+    today = now.date()
+    t_today = things_date(today)
+    con = ro_connect(db_path)
+    try:
+        rows = con.execute(
+            f"""SELECT t.uuid, t.title, t.start, t.startDate, t.deadline, COALESCE(a.title, pa.title, '') AS area,
+                       COALESCE(p.title, '') AS project, {tags_col(con)}
+               FROM TMTask t
+               LEFT JOIN TMArea a ON a.uuid = t.area
+               LEFT JOIN TMTask p ON p.uuid = t.project
+               LEFT JOIN TMArea pa ON pa.uuid = p.area
+               WHERE t.type = 0 AND t.status = 0 AND t.trashed = 0
+               ORDER BY t.startDate IS NULL, t.startDate, t.title
+               LIMIT ?""", (ALL_MAX,)).fetchall()
+    finally:
+        con.close()
+    out = []
+    for r in rows:
+        if r["startDate"] is not None and r["startDate"] <= t_today and r["start"] != 0:
+            where = "today"
+        elif r["startDate"] is not None:
+            where = "upcoming"
+        else:
+            where = {0: "inbox", 1: "anytime", 2: "someday"}.get(r["start"], "anytime")
+        tags = [t for t in TAG_SPLIT.split(r["tags"] or "") if t]
+        out.append({"id": r["uuid"], "title": r["title"],
+                    "kind": kind_of(r["title"], r["area"], r["project"], tags=r["tags"]),
+                    "list": where,
+                    "when": from_things_date(r["startDate"]).isoformat() if r["startDate"] else None,
+                    "due": from_things_date(r["deadline"]).isoformat() if r["deadline"] else None,
+                    "tags": sorted(set(tags)), "project": r["project"] or None, "area": r["area"] or None})
+    return out
+
+
 # --- Pillars: how each area of life is going, for the phone ---------------
 
 PILLAR_DAYS = 60  # how far back last_done looks
@@ -937,11 +980,12 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
     if things_db:
         status = things_status(things_db, now)
         status["pillars"] = things_pillars(things_db, now)
+        status["all"] = things_all(things_db, now)
         status["friends_overdue"] = friends_overdue(cfg.get("messages_db", MESSAGES_DB), cfg.get("friends", []), now)
         status["events"], report["calendar"] = read_calendar(cfg, now)
         report["job_tracker"] = read_job_tracker(cfg, status, now)
         payload["things"] = status
-        report["things"] = {k: v for k, v in status.items() if k not in ("completed_ids", "pool", "week")}
+        report["things"] = {k: v for k, v in status.items() if k not in ("completed_ids", "pool", "week", "later", "all")}
         report["small_jobs"], report["this_week"] = len(status["pool"]), len(status["week"])
     if dry_run:
         report["would_send"] = len(items)

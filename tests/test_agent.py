@@ -171,6 +171,15 @@ class AgentTests(unittest.TestCase):
         self.assertIn("when=2026-11-03", opened[1])
         self.assertEqual(calls[-1], ("POST", "/api/todo/ack", {"ids": ["d1", "l1"]}))
 
+    def test_things_all_lists_every_open_todo(self):
+        rows = {r["id"]: r for r in agent.things_all(self.things, NOW)}
+        # make_things: t1 today, t2 today (started yesterday), t3 Someday, t4 Upcoming (+5 days); t5/t6 done.
+        self.assertEqual(set(rows), {"t1", "t2", "t3", "t4"})
+        self.assertEqual((rows["t1"]["list"], rows["t1"]["kind"], rows["t1"]["area"]), ("today", "danish", "Danish"))
+        self.assertEqual((rows["t3"]["list"], rows["t3"]["when"]), ("someday", None))
+        self.assertEqual((rows["t4"]["list"], rows["t4"]["when"]), ("upcoming", (NOW.date() + timedelta(days=5)).isoformat()))
+        self.assertEqual(rows["t2"]["due"], (NOW.date() + timedelta(days=3)).isoformat())
+
     def test_dry_run_end_to_end(self):
         report = agent.run_once({"mail_db": self.mail, "things_db": self.things, "days": 21,
                                  "messages_db": "/nonexistent"}, now=NOW, dry_run=True)
