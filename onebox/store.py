@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
+from pathlib import Path
 import threading
 from datetime import datetime, timezone
 
@@ -330,6 +331,26 @@ class Store:
         d["when"] = r["when_day"]
         d["tags"] = json.loads(r["tags"] or "[]")
         return {k: v for k, v in d.items() if v not in (None, [], "")}
+
+    def backup(self, folder: str, day: str, keep: int = 14) -> str | None:
+        """Copy the whole database to folder/onebox-<day>.sqlite3 (SQLite's online backup, safe while it runs),
+        once a day, keeping the newest `keep` copies. Returns the new file, or None when today's is already there."""
+        out = Path(folder)
+        out.mkdir(parents=True, exist_ok=True)
+        target = out / f"onebox-{day}.sqlite3"
+        if target.exists():
+            return None
+        tmp = target.with_suffix(".part")
+        dest = sqlite3.connect(tmp)
+        try:
+            with self.lock:
+                self.db.backup(dest)
+        finally:
+            dest.close()
+        tmp.replace(target)
+        for old in sorted(out.glob("onebox-*.sqlite3"))[:-keep]:
+            old.unlink()
+        return str(target)
 
     def tasks(self, status: str = "open") -> list[dict]:
         with self.lock:
