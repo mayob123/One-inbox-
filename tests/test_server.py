@@ -276,14 +276,13 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.web.req(self.base, "POST", "/api/tasks", {"title": "x", "kind": "nope"}, C)[0], 400)
         self.assertEqual(self.web.req(self.base, "POST", f"/api/tasks/{new['id']}", {"title": "Book the PD3 exam"}, C)[0], 200)
         self.assertEqual(self.store.task(new["id"])["title"], "Book the PD3 exam")
-        # Things to-dos are changed in Things for now; done and Not today go through the Mac.
-        self.assertEqual(self.web.req(self.base, "POST", "/api/tasks/B", {"title": "x"}, C)[0], 409)
+        # Done, Not today and edits on Things to-dos go through the Mac.
         self.assertEqual(self.web.req(self.base, "POST", "/api/tasks/B/later", {"when": tomorrow}, C)[0], 200)
         self.assertEqual(self.web.req(self.base, "POST", "/api/tasks/B/later", {"when": day.isoformat()}, C)[0], 400)
         self.assertEqual(self.web.req(self.base, "POST", "/api/tasks/A/done", {}, C)[0], 200)
         self.assertEqual(self.web.req(self.base, "POST", "/api/tasks/A/done", {}, C)[0], 404)
         box = json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])
-        self.assertEqual((box["ids"], box["later"]), (["A"], [{"id": "B", "when": tomorrow}]))
+        self.assertEqual((box["ids"], box["later"], box["edits"]), (["A"], [{"id": "B", "when": tomorrow}], []))
         # The next sync still shows the old Things state: the tick and the new day here win until the Mac acts.
         self.ingest(things={"left": 1, "all": everything, "completed_ids": []})
         self.assertEqual(self.store.task("A")["status"], "done")
@@ -302,6 +301,39 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.store.task("B")["status"], "open")
         self.web.req(self.base, "POST", f"/api/tasks/{new['id']}/done", {}, C)
         self.assertEqual(json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])["ids"], [])
+
+    def test_editing_a_things_todo_goes_through_the_mac(self):
+        C = {"Authorization": "Bearer " + "c" * 20}
+        day = datetime.now(Config(ENV).tz).date()
+        later = (day + timedelta(days=3)).isoformat()
+        row = {"id": "B", "title": "Quizlet deck", "kind": "danish", "list": "anytime", "notes": "old"}
+        self.ingest(things={"left": 1, "all": [row], "completed_ids": []})
+        self.assertEqual(self.web.req(self.base, "POST", "/api/tasks/B",
+                                      {"title": "Quizlet deck 3", "notes": "chapter 3", "kind": "msc"}, C)[0], 200)
+        self.assertEqual(self.web.req(self.base, "POST", "/api/tasks/B", {"when": later, "list": "upcoming"}, C)[0], 200)
+        task = self.store.task("B")
+        self.assertEqual((task["title"], task["notes"], task["when"], task["kind"]),
+                         ("Quizlet deck 3", "chapter 3", later, "danish"))  # the pillar stays Things' tag
+        box = json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])
+        [edit] = box["edits"]
+        self.assertEqual({k: v for k, v in edit.items() if k != "at"},
+                         {"id": "B", "title": "Quizlet deck 3", "notes": "chapter 3", "when": later})
+        # Things still has the old version until the Mac acts: the edit here wins.
+        self.ingest(things={"left": 1, "all": [row], "completed_ids": []})
+        self.assertEqual((self.store.task("B")["title"], self.store.task("B")["when"]), ("Quizlet deck 3", later))
+        # An edit made after the Mac read the outbox stays queued.
+        self.web.req(self.base, "POST", "/api/tasks/B", {"title": "Quizlet deck 4"}, C)
+        self.web.req(self.base, "POST", "/api/todo/ack", {"ids": [], "edits": [edit]}, self.agent)
+        [again] = json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])["edits"]
+        self.assertEqual(again["title"], "Quizlet deck 4")
+        self.web.req(self.base, "POST", "/api/todo/ack", {"ids": [], "edits": [again]}, self.agent)
+        self.assertEqual(json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])["edits"], [])
+        # Once Things has it, its version is the truth again.
+        self.ingest(things={"left": 1, "all": [dict(row, title="Quizlet deck 4", notes="chapter 3", list="upcoming",
+                                                    when=later)], "completed_ids": []})
+        self.assertEqual(self.store.task("B")["title"], "Quizlet deck 4")
+        self.ingest(things={"left": 1, "all": [dict(row, title="Renamed in Things")], "completed_ids": []})
+        self.assertEqual(self.store.task("B")["title"], "Renamed in Things")
 
     def test_today_feed_has_pillars_with_waiting_mail(self):
         self.ingest(things={"left": 0, "pillars": {"bill": {"done_week": 1, "open": 2}}})
@@ -378,12 +410,12 @@ class ServerTests(unittest.TestCase):
         self.assertEqual((out["task"], out["when"], out["tags"]), ("Pick up frames", "anytime", ["Errands"]))
 
     def test_capture_on_a_named_day(self):
-        code, raw = self.web.req(self.base, "POST", "/api/capture", {"text": "Dentist on 2026-11-02 at 9"},
+        code, raw = self.web.req(self.base, "POST", "/api/capture", {"text": "Dentist on 2099-11-02 at 9"},
                                  {"Authorization": "Bearer " + "c" * 20})
         body = json.loads(raw)
         self.assertEqual((code, body["when"]), (200, "Mon 2 Nov at 09:00"))
         self.assertIn("for Mon 2 Nov at 09:00", body["message"])
-        self.assertEqual(self.outbox()[0]["when"], "2026-11-02@09:00")
+        self.assertEqual(self.outbox()[0]["when"], "2099-11-02@09:00")
 
     def test_pal_round_trip(self):
         W = {"X-OneInbox-Token": "w" * 20}

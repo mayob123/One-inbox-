@@ -171,6 +171,27 @@ class AgentTests(unittest.TestCase):
         self.assertIn("when=2026-11-03", opened[1])
         self.assertEqual(calls[-1], ("POST", "/api/todo/ack", {"ids": ["d1", "l1"]}))
 
+    def test_edits_are_made_in_things(self):
+        cfg = {"server": "http://pi", "token": "t", "things_auth_token": "AUTH"}
+        calls, opened = [], []
+        edits = [{"id": "e1", "at": "T1", "title": "New name", "notes": "", "when": "someday"},
+                 {"id": "e2", "at": "T2", "when": "soon"}]
+
+        def fake_call(server, token, method, path, body=None):
+            calls.append((method, path, body))
+            return {"ids": [], "later": [], "edits": edits} if method == "GET" else {}
+
+        with mock.patch.object(agent, "call", fake_call), \
+                mock.patch.object(agent.subprocess, "run", lambda args, check: opened.append(args[-1])):
+            self.assertEqual(agent.complete_in_things(cfg), 2)
+        self.assertEqual(len(opened), 1)  # e2 had nothing Things could take
+        self.assertIn("id=e1", opened[0])
+        self.assertIn("title=New%20name", opened[0])
+        self.assertIn("notes=&", opened[0])
+        self.assertIn("when=someday", opened[0])
+        self.assertEqual(calls[-1], ("POST", "/api/todo/ack",
+                                     {"ids": [], "edits": [{"id": "e1", "at": "T1"}, {"id": "e2", "at": "T2"}]}))
+
     def test_things_all_lists_every_open_todo(self):
         rows = {r["id"]: r for r in agent.things_all(self.things, NOW)}
         # make_things: t1 today, t2 today (started yesterday), t3 Someday, t4 Upcoming (+5 days); t5/t6 done.

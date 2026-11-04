@@ -182,7 +182,8 @@ def make_handler(cfg: Config, store: Store):
             if path == "/api/todo/outbox":
                 if not self._agent_ok():
                     return self._send(401)
-                return self._json(200, {"ids": store.todo_outbox(), "later": store.later_outbox()})
+                return self._json(200, {"ids": store.todo_outbox(), "later": store.later_outbox(),
+                                        "edits": store.edit_outbox(self._now().date().isoformat())})
             return self._send(404)
 
         def do_POST(self):
@@ -255,10 +256,7 @@ def make_handler(cfg: Config, store: Store):
                             return self._json(400, {"error": "when must be a day after today"})
                         ok = store.push_task(tid, when)
                     else:
-                        result = store.edit_task(tid, task_fields(body, day))
-                        if result == "things":
-                            return self._json(409, {"error": "This one lives in Things for now: change it there."})
-                        ok = result == "ok"
+                        ok = store.edit_task(tid, task_fields(body, day)) == "ok"
                     if not ok:
                         return self._json(404, {"error": "No open to-do with that id."})
                     return self._json(200, {"ok": True, "task": store.task(tid)})
@@ -294,7 +292,9 @@ def make_handler(cfg: Config, store: Store):
                 if path == "/api/todo/ack":
                     if not self._agent_ok():
                         return self._send(401)
-                    return self._json(200, {"ok": True, "acked": store.ack_todos(self._body().get("ids", []))})
+                    body = self._body()
+                    acked = store.ack_todos(body.get("ids", [])) + store.ack_edits(body.get("edits") or [])
+                    return self._json(200, {"ok": True, "acked": acked})
                 if path == "/api/ingest":
                     if not self._agent_ok():
                         return self._send(401)

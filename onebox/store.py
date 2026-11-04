@@ -53,6 +53,12 @@ CREATE TABLE IF NOT EXISTS tasks (
   updated_at TEXT NOT NULL,
   done_at TEXT
 );
+CREATE TABLE IF NOT EXISTS task_edits (
+  uuid TEXT PRIMARY KEY,
+  fields TEXT NOT NULL,
+  at TEXT NOT NULL,
+  synced_at TEXT
+);
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -267,6 +273,43 @@ class Store:
             return [{"id": r[0], "when": r[1]} for r in self.db.execute(
                 "SELECT uuid, day FROM todo_actions WHERE action='later' AND synced_at IS NULL ORDER BY at")]
 
+    def edit_outbox(self, today: str) -> list[dict]:
+        """Edits to Things to-dos the Mac hasn't made in Things yet: [{"id", "at", "title"?, "notes"?, "when"?}].
+        `when` is what Things takes: "today", "anytime", "someday" or a day."""
+        with self.lock:
+            rows = self.db.execute(
+                """SELECT e.uuid, e.fields, e.at, t.when_day, t.list FROM task_edits e JOIN tasks t ON t.id = e.uuid
+                   WHERE e.synced_at IS NULL AND t.status = 'open' ORDER BY e.at""").fetchall()
+        out = []
+        for r in rows:
+            f = json.loads(r["fields"])
+            item = {"id": r["uuid"], "at": r["at"]}
+            if "title" in f:
+                item["title"] = f["title"]
+            if "notes" in f:
+                item["notes"] = f["notes"] or ""
+            if "when_day" in f or "list" in f:
+                day, lst = r["when_day"], r["list"]
+                if lst == "someday":
+                    item["when"] = "someday"
+                elif day and day > today:
+                    item["when"] = day
+                elif day or lst == "today":
+                    item["when"] = "today"
+                else:
+                    item["when"] = "anytime"
+            out.append(item)
+        return out
+
+    def ack_edits(self, done: list[dict]) -> int:
+        """The Mac made these edits in Things. Each carries the `at` it was sent with, so a newer edit stays queued."""
+        ts = now_iso()
+        with self.lock:
+            n = sum(self.db.execute("UPDATE task_edits SET synced_at=? WHERE uuid=? AND at=? AND synced_at IS NULL",
+                                    (ts, str(d.get("id")), str(d.get("at")))).rowcount for d in done if d.get("id"))
+            self.db.commit()
+        return n
+
     def ack_todos(self, uuids: list[str]) -> int:
         ts = now_iso()
         with self.lock:
@@ -300,13 +343,17 @@ class Store:
                     """INSERT INTO tasks (id, source, title, notes, kind, list, when_day, due, tags, project, area,
                                           status, created_at, updated_at)
                        VALUES (?, 'things', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
-                       ON CONFLICT(id) DO UPDATE SET title=excluded.title, notes=COALESCE(excluded.notes, tasks.notes),
+                       ON CONFLICT(id) DO UPDATE SET
+                         title=CASE WHEN EXISTS (SELECT 1 FROM task_edits e WHERE e.uuid=tasks.id AND e.synced_at IS NULL) THEN tasks.title ELSE excluded.title END,
+                         notes=CASE WHEN EXISTS (SELECT 1 FROM task_edits e WHERE e.uuid=tasks.id AND e.synced_at IS NULL) THEN tasks.notes ELSE COALESCE(excluded.notes, tasks.notes) END,
                          kind=excluded.kind, due=excluded.due,
                          tags=excluded.tags, project=excluded.project, area=excluded.area,
                          list=CASE WHEN EXISTS (SELECT 1 FROM todo_actions a WHERE a.uuid=tasks.id
-                                  AND a.action='later' AND a.synced_at IS NULL) THEN tasks.list ELSE excluded.list END,
+                                  AND a.action='later' AND a.synced_at IS NULL) OR EXISTS (SELECT 1 FROM task_edits e WHERE e.uuid=tasks.id AND e.synced_at IS NULL)
+                                  THEN tasks.list ELSE excluded.list END,
                          when_day=CASE WHEN EXISTS (SELECT 1 FROM todo_actions a WHERE a.uuid=tasks.id
-                                  AND a.action='later' AND a.synced_at IS NULL) THEN tasks.when_day ELSE excluded.when_day END,
+                                  AND a.action='later' AND a.synced_at IS NULL) OR EXISTS (SELECT 1 FROM task_edits e WHERE e.uuid=tasks.id AND e.synced_at IS NULL)
+                                  THEN tasks.when_day ELSE excluded.when_day END,
                          status=CASE WHEN EXISTS (SELECT 1 FROM todo_actions a WHERE a.uuid=tasks.id AND a.action='done'
                                   AND a.uuid NOT IN (SELECT uuid FROM completed)) THEN tasks.status ELSE 'open' END,
                          done_at=CASE WHEN EXISTS (SELECT 1 FROM todo_actions a WHERE a.uuid=tasks.id AND a.action='done'
@@ -379,15 +426,31 @@ class Store:
             self.db.commit()
         return self.task(tid)
 
+    # What can change on a Things to-do from here: the Mac carries it over to Things (title, notes and day).
+    THINGS_EDITABLE = ("title", "notes", "when_day", "list")
+
     def edit_task(self, task_id: str, fields: dict) -> str:
-        """Change a to-do made in the app. Returns "ok", "missing" or "things" (change those in Things for now)."""
+        """Change a to-do. One from Things changes here at once and waits in the Mac's outbox, which makes the same
+        change in Things; until then the next sync keeps this version. Returns "ok" or "missing"."""
         cur = self.task(task_id)
         if not cur:
             return "missing"
-        if cur["source"] != "app":
-            return "things"
-        sets = {k: v for k, v in fields.items() if k in self.TASK_FIELDS}
-        if "tags" in fields:
+        things = cur["source"] == "things"
+        allowed = self.THINGS_EDITABLE if things else self.TASK_FIELDS
+        sets = {k: v for k, v in fields.items() if k in allowed}
+        if things and sets:
+            with self.lock:
+                row = self.db.execute("SELECT fields FROM task_edits WHERE uuid=? AND synced_at IS NULL",
+                                      (task_id,)).fetchone()
+                merged = {**(json.loads(row["fields"]) if row else {}), **sets}
+                self.db.execute(
+                    """INSERT INTO task_edits (uuid, fields, at) VALUES (?, ?, ?)
+                       ON CONFLICT(uuid) DO UPDATE SET fields=excluded.fields, at=excluded.at, synced_at=NULL""",
+                    (task_id, json.dumps(merged), datetime.now(timezone.utc).isoformat()))
+                self.db.commit()
+        elif things:
+            return "ok"
+        if "tags" in fields and not things:
             sets["tags"] = json.dumps(fields["tags"] or [])
         if not sets:
             return "ok"
