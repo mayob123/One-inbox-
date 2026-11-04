@@ -768,17 +768,28 @@ def complete_in_things(cfg: dict, dry_run: bool = False) -> int | str:
         return f"Pi has no /api/todo/outbox yet ({e.code}). Update it with install-pi.sh."
     ids = box.get("ids", [])
     later = [m for m in box.get("later") or [] if m.get("id") and THINGS_DAY.fullmatch(str(m.get("when") or ""))]
-    if not ids and not later:
+    edits = [e for e in box.get("edits") or [] if e.get("id")]
+    if not ids and not later and not edits:
         return 0
     token = cfg.get("things_auth_token", "")
     if not token:
-        return f"{len(ids) + len(later)} waiting: add things_auth_token to agent.json (see docs/setup.md)"
+        return f"{len(ids) + len(later) + len(edits)} waiting: add things_auth_token to agent.json (see docs/setup.md)"
     for uuid in ids:
         subprocess.run(["open", "-g", things_done_url(uuid, token)], check=True)
     for m in later:  # Not today on the phone: Things shows it again on that day
         subprocess.run(["open", "-g", things_update_url(m["id"], token, when=m["when"])], check=True)
-    call(cfg["server"], cfg["token"], "POST", "/api/todo/ack", {"ids": [*ids, *(m["id"] for m in later)]})
-    return len(ids) + len(later)
+    for e in edits:  # Edited in Pocket Pal: the same change in Things
+        attrs = {k: e[k] for k in ("title", "notes") if k in e}
+        when = str(e.get("when") or "")
+        if when in ("today", "anytime", "someday") or THINGS_DAY.fullmatch(when):
+            attrs["when"] = when
+        if attrs:
+            subprocess.run(["open", "-g", things_update_url(e["id"], token, **attrs)], check=True)
+    body = {"ids": [*ids, *(m["id"] for m in later)]}
+    if edits:
+        body["edits"] = [{"id": e["id"], "at": e.get("at")} for e in edits]
+    call(cfg["server"], cfg["token"], "POST", "/api/todo/ack", body)
+    return len(ids) + len(later) + len(edits)
 
 
 TAGGED = Path.home() / ".config" / "onebox" / "tagged.json"
