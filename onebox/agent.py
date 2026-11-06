@@ -1018,7 +1018,7 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
         report["small_jobs"], report["this_week"] = len(status["pool"]), len(status["week"])
     if dry_run:
         report["would_send"] = len(items)
-        if cfg.get("calendars") or cfg.get("deadlines") or job_deadlines(cfg, now):
+        if cfg.get("calendars") or cfg.get("deadlines") or cfg.get("study") or job_deadlines(cfg, now):
             report["calendar"] = calendar_preview(cfg, now)
         return report
     call(cfg["server"], cfg["token"], "POST", "/api/ingest", payload)
@@ -1057,7 +1057,7 @@ def calendar_preview(cfg: dict, now: datetime) -> dict:
 
 def sync_calendars(cfg: dict, now: datetime) -> dict:
     jobs = job_deadlines(cfg, now)
-    if not cfg.get("calendars") and not cfg.get("deadlines") and not jobs:
+    if not cfg.get("calendars") and not cfg.get("deadlines") and not cfg.get("study") and not jobs:
         return {}
     seen_path = Path(cfg.get("calendar_seen", CALENDAR_SEEN))
     events, errors = studycal.collect(cfg, now)
