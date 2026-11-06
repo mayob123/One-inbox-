@@ -205,7 +205,8 @@ class AgentSyncTests(unittest.TestCase):
 
     def test_no_calendars_configured_does_nothing(self):
         with mock.patch.object(agent.subprocess, "run") as run:
-            self.assertEqual(agent.sync_calendars({}, NOW), {})
+            # no calendars and no job tracker (the Mac running the tests may have a real one)
+            self.assertEqual(agent.sync_calendars({"job_tracker_db": ""}, NOW), {})
         run.assert_not_called()
 
 
