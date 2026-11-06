@@ -50,7 +50,7 @@ CONFIG_PATH = Path(os.environ.get("ONEBOX_AGENT_CONFIG", HOME / ".config/onebox/
 CALENDAR_SEEN = CONFIG_PATH.parent / "calendar-seen.json"
 JOB_TRACKER_DB = str(HOME / "Documents/job-tracker/data/job_tracker.db")
 JOB_LEADS = ("Strong fit", "Possible fit")  # job tracker fit tiers worth a deadline nudge
-LEADS_SHOWN = 5  # the best open leads the phone lists on the job hunt page
+LEADS_SHOWN = 30  # the open Strong/Possible leads the phone lists on the job hunt page
 JOB_APPLY = ("Strong fit",)  # tracker leads that get an "Apply:" to-do before their deadline ("job_apply_tiers")
 
 SKIP_MAILBOXES = ("junk", "spam", "trash", "deleted", "drafts", "blocked", "outbox")
@@ -599,8 +599,9 @@ def job_tracker(db_path: str, now: datetime, days: int = 14) -> tuple[list[dict]
         applied = con.execute("SELECT COUNT(*) FROM applications WHERE date_applied >= ?", (monday,)).fetchone()[0]
         cols = {r[1] for r in con.execute("PRAGMA table_info(jobs)")}
         link = next((c for c in ("url", "link", "job_url", "apply_url") if c in cols), None)
+        found = "date_fetched" if "date_fetched" in cols else "NULL"
         lead_rows = con.execute(
-            f"""SELECT title, company, deadline, {link or 'NULL'} AS url FROM jobs
+            f"""SELECT title, company, deadline, {link or 'NULL'} AS url, fit_tier, {found} AS found FROM jobs
                 WHERE COALESCE(dismissed, 0) = 0 AND COALESCE(likely_closed, 0) = 0 AND fit_tier IN ({marks})
                   AND (deadline IS NULL OR deadline >= ?)
                 ORDER BY deadline IS NULL, deadline, fit_tier LIMIT ?""",
@@ -617,8 +618,19 @@ def job_tracker(db_path: str, now: datetime, days: int = 14) -> tuple[list[dict]
     dues = [d for d in (app_due, lead_due) if d]
     extra = {"applied_week": applied, "leads": leads, "job_due": min(dues) if dues else None,
              "interview_at": events[0]["start"] if events else None,
-             "lead_list": [{k: r[k] for k in ("title", "company", "deadline", "url") if r[k]} for r in lead_rows]}
+             "lead_list": [_lead(r) for r in lead_rows]}
     return events, extra
+
+
+def _lead(r) -> dict:
+    """One open lead for the phone: title, company, deadline, url, fit ("Strong"/"Possible") and the day
+    the tracker found it ("found", yyyy-mm-dd). Empty fields are left out."""
+    lead = {k: r[k] for k in ("title", "company", "deadline", "url") if r[k]}
+    if r["fit_tier"]:
+        lead["fit"] = r["fit_tier"].replace(" fit", "")
+    if r["found"]:
+        lead["found"] = str(r["found"])[:10]
+    return lead
 
 
 def job_deadlines(cfg: dict, now: datetime) -> list[studycal.Event]:

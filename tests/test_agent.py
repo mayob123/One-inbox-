@@ -92,7 +92,7 @@ def make_job_tracker(path):
         CREATE TABLE applications (id INTEGER PRIMARY KEY, job_title TEXT, company TEXT, date_applied TEXT,
             status TEXT, deadline TEXT, interview_at TEXT);
         CREATE TABLE jobs (id INTEGER PRIMARY KEY, title TEXT, company TEXT, deadline TEXT, dismissed INTEGER,
-            likely_closed INTEGER, fit_tier TEXT);
+            likely_closed INTEGER, fit_tier TEXT, url TEXT, date_fetched TEXT);
     """)
     fmt = lambda d: d.strftime("%Y-%m-%d %H:%M")
     day = lambda n: (NOW.date() + timedelta(days=n)).isoformat()
@@ -103,11 +103,11 @@ def make_job_tracker(path):
         ("Saved Co", None, "saved", day(6), None),
         ("Late Co", None, "saved", day(-1), None),                                  # deadline passed
     ])
-    con.executemany("INSERT INTO jobs (title, deadline, dismissed, likely_closed, fit_tier) VALUES (?,?,?,?,?)", [
-        ("Strong", day(4), 0, 0, "Strong fit"),
-        ("Possible", None, 0, 0, "Possible fit"),
-        ("Long", day(1), 0, 0, "Long shot"),
-        ("Dismissed", day(1), 1, 0, "Strong fit"),
+    con.executemany("INSERT INTO jobs (title, deadline, dismissed, likely_closed, fit_tier, url, date_fetched) VALUES (?,?,?,?,?,?,?)", [
+        ("Strong", day(4), 0, 0, "Strong fit", "https://jobs.example/1", day(-2) + " 09:24:00"),
+        ("Possible", None, 0, 0, "Possible fit", None, None),
+        ("Long", day(1), 0, 0, "Long shot", None, None),
+        ("Dismissed", day(1), 1, 0, "Strong fit", None, None),
     ])
     con.commit()
     con.close()
@@ -288,6 +288,10 @@ class AgentTests(unittest.TestCase):
         self.assertEqual((job["next_due"], job["job_due"], job["leads"], job["applied_week"], job["open"]),
                          (due, due, 2, 1, 2))
         self.assertEqual([lead["title"] for lead in job["lead_list"]], ["Strong", "Possible"])  # soonest first
+        self.assertEqual(job["lead_list"][0], {"title": "Strong", "deadline": (NOW.date() + timedelta(days=4)).isoformat(),
+                                               "url": "https://jobs.example/1", "fit": "Strong",
+                                               "found": (NOW.date() - timedelta(days=2)).isoformat()})
+        self.assertEqual(job["lead_list"][1], {"title": "Possible", "fit": "Possible"})
         self.assertEqual(datetime.fromisoformat(job["interview_at"]),
                          (NOW + timedelta(hours=5)).replace(second=0, microsecond=0))
         self.assertEqual(agent.read_job_tracker({"job_tracker_db": self.mail}, {}, NOW)[:9], "Could not")
