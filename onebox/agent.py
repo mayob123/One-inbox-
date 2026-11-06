@@ -994,7 +994,10 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
     if things_db:
         status = things_status(things_db, now)
         status["pillars"] = things_pillars(things_db, now)
-        status["all"] = things_all(things_db, now)
+        if cfg.get("things_mirror", True):  # off: Pocket Pal keeps its own list and stops copying Things'
+            status["all"] = things_all(things_db, now)
+        else:
+            payload["adopt_things"] = True
         status["friends_overdue"] = friends_overdue(cfg.get("messages_db", MESSAGES_DB), cfg.get("friends", []), now)
         status["events"], report["calendar"] = read_calendar(cfg, now)
         report["job_tracker"] = read_job_tracker(cfg, status, now)
@@ -1007,18 +1010,28 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
             report["calendar"] = calendar_preview(cfg, now)
         return report
     call(cfg["server"], cfg["token"], "POST", "/api/ingest", payload)
+    report["calendar"] = sync_calendars(cfg, now)
+    if not writes_things(cfg):
+        # Pocket Pal is separate: the Pi puts emails, captures and post on its own list, and nothing is written
+        # to Things. Ben's own Things to-dos are left exactly as they are.
+        report["things_writes"] = "off"
+        return report
     outbox = call(cfg["server"], cfg["token"], "GET", "/api/outbox").get("items", [])
     if outbox:
         subprocess.run(["open", "-g", things_add_url(outbox)], check=True)
         call(cfg["server"], cfg["token"], "POST", "/api/outbox/ack", {"ids": [i["id"] for i in outbox]})
     report["added_to_things"] = len(outbox)
     report["completed_in_things"] = complete_in_things(cfg)
-    report["calendar"] = sync_calendars(cfg, now)
     if things_db:
         report["post_in_things"] = sync_post(cfg, things_db)
         report["post_tidied"] = tidy_post(cfg, things_db)
         report["tagged_in_things"] = tag_in_things(cfg, things_db)
     return report
+
+
+def writes_things(cfg: dict) -> bool:
+    """Since 2026-11-06 nothing writes to Things 3 unless agent.json says "things_writes": true."""
+    return bool(cfg.get("things_writes", False))
 
 
 def calendar_preview(cfg: dict, now: datetime) -> dict:
@@ -1040,8 +1053,15 @@ def sync_calendars(cfg: dict, now: datetime) -> dict:
     seen = studycal.load_seen(seen_path)
     new = studycal.due_now(events, seen, now)
     todos = studycal.things_json(new, now.date())
-    if todos:
+    if todos and not writes_things(cfg):  # onto Pocket Pal's list on the Pi
+        try:
+            call(cfg["server"], cfg["token"], "POST", "/api/agent/todos",
+                 {"source": "calendar", "todos": [t["attributes"] for t in todos]})
+        except urllib.error.HTTPError as e:  # a Pi without the route yet: keep them for the next sync
+            return {"added": 0, "errors": [*errors, f"Pi has no /api/agent/todos yet ({e.code}). Update it."]}
+    elif todos:
         subprocess.run(["open", "-g", "things:///json?data=" + urllib.parse.quote(json.dumps(todos))], check=True)
+    if todos:
         for ev in new:
             seen[ev.key()] = now.date().isoformat()
     studycal.save_seen(seen_path, seen, now.date())

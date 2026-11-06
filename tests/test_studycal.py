@@ -173,7 +173,7 @@ class AgentSyncTests(unittest.TestCase):
             ics = Path(d, "feed.ics")
             ics.write_text(ICS)
             cfg = {"calendars": [{"name": "York MSc", "url": str(ics), "list": "York MSc"}],
-                   "calendar_seen": os.path.join(d, "seen.json")}
+                   "calendar_seen": os.path.join(d, "seen.json"), "things_writes": True}
             with mock.patch.object(agent.subprocess, "run") as run:
                 first = agent.sync_calendars(cfg, NOW)
                 second = agent.sync_calendars(cfg, NOW)
@@ -185,6 +185,23 @@ class AgentSyncTests(unittest.TestCase):
             todos = json.loads(urllib.parse.unquote(url.split("data=", 1)[1]))
             titles = [t["attributes"]["title"] for t in todos]
             self.assertIn("19:00 Live session: Week 1 welcome", titles)
+
+    def test_sync_goes_to_the_pi_and_never_things_by_default(self):
+        with tempfile.TemporaryDirectory() as d:
+            ics = Path(d, "feed.ics")
+            ics.write_text(ICS)
+            cfg = {"calendars": [{"name": "York MSc", "url": str(ics), "list": "York MSc"}],
+                   "calendar_seen": os.path.join(d, "seen.json"), "server": "http://pi", "token": "t"}
+            with mock.patch.object(agent.subprocess, "run") as run, mock.patch.object(agent, "call") as call:
+                first = agent.sync_calendars(cfg, NOW)
+                second = agent.sync_calendars(cfg, NOW)
+            run.assert_not_called()
+            self.assertGreater(first["added"], 0)
+            self.assertEqual(second["added"], 0)
+            self.assertEqual(call.call_count, 1)
+            _, _, method, path, body = call.call_args[0]
+            self.assertEqual((method, path, body["source"]), ("POST", "/api/agent/todos", "calendar"))
+            self.assertIn("19:00 Live session: Week 1 welcome", [t["title"] for t in body["todos"]])
 
     def test_no_calendars_configured_does_nothing(self):
         with mock.patch.object(agent.subprocess, "run") as run:

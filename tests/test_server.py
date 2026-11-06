@@ -83,17 +83,17 @@ class ServerTests(unittest.TestCase):
         code, _ = self.web.req(self.base, "POST", "/api/ingest", {"items": [ITEM]}, {"Authorization": "Bearer nope"})
         self.assertEqual(code, 401)
 
-    def test_decide_add_flows_to_outbox_once(self):
+    def test_decide_add_goes_to_the_pi_list_not_things(self):
         self.ingest()
         self.web.req(self.base, "POST", "/login", form={"key": "u" * 20})
         code, _ = self.web.req(self.base, "POST", f"/api/items/{ITEM['id']}/decision", {"decision": "add"})
         self.assertEqual(code, 200)
-        out = json.loads(self.web.req(self.base, "GET", "/api/outbox", headers=self.agent)[1])["items"]
-        self.assertEqual([i["id"] for i in out], [ITEM["id"]])
-        self.web.req(self.base, "POST", "/api/outbox/ack", {"ids": [ITEM["id"]]}, self.agent)
-        out = json.loads(self.web.req(self.base, "GET", "/api/outbox", headers=self.agent)[1])["items"]
-        self.assertEqual(out, [])
-        # Once in Things it can't be changed from the page.
+        # Nothing waits for the Mac to put in Things: it's on Pocket Pal's own list at once.
+        self.assertEqual(self.outbox(), [])
+        [task] = self.tasks()
+        self.assertEqual((task["title"], task["source"], task["kind"]), (ITEM["task"], "inbox", ITEM["kind"]))
+        self.assertIn("From ", task["notes"])
+        # Once on the list it can't be changed from the page.
         code, _ = self.web.req(self.base, "POST", f"/api/items/{ITEM['id']}/decision", {"decision": "skip"})
         self.assertEqual(code, 409)
 
@@ -154,13 +154,17 @@ class ServerTests(unittest.TestCase):
     def outbox(self):
         return json.loads(self.web.req(self.base, "GET", "/api/outbox", headers=self.agent)[1])["items"]
 
+    def tasks(self):
+        raw = self.web.req(self.base, "GET", "/api/tasks", headers={"Authorization": "Bearer " + "c" * 20})[1]
+        return json.loads(raw)["tasks"]
+
     def test_auto_items_are_queued_once_and_can_be_unticked(self):
         auto = dict(ITEM, id="fedcba9876543210", title="Ny besked", task="Read in Aula: Ny besked", auto="things")
         self.web.req(self.base, "POST", "/api/ingest", {"items": [auto]}, self.agent)
-        self.assertEqual([i["id"] for i in self.outbox()], [auto["id"]])
-        self.store.decide(auto["id"], None)  # Ben unticks it on the page
-        self.web.req(self.base, "POST", "/api/ingest", {"items": [auto]}, self.agent)
         self.assertEqual(self.outbox(), [])
+        self.assertEqual([(t["title"], t["list"]) for t in self.tasks()], [("Read in Aula: Ny besked", "today")])
+        self.web.req(self.base, "POST", "/api/ingest", {"items": [auto]}, self.agent)
+        self.assertEqual(len(self.tasks()), 1)  # once only
 
     def test_quiet_sender_is_not_auto_added(self):
         first = dict(ITEM, id="1111111111111111", from_addr="noreply@aula.dk", auto="things")
@@ -181,9 +185,10 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.web.req(self.base, "POST", "/api/capture", {"text": "Buy milk"})[0], 200)
         self.assertEqual(self.web.req(self.base, "POST", "/api/capture", {"text": "  "})[0], 400)
         self.assertEqual(self.web.req(self.base, "POST", "/api/capture", {"text": "x" * 501})[0], 400)
-        out = {i["task"]: i for i in self.outbox()}
+        self.assertEqual(self.outbox(), [])
+        out = {t["title"]: t for t in self.tasks()}
         self.assertEqual(set(out), {"Ring the tandlæge", "Buy milk"})
-        self.assertEqual(out["Ring the tandlæge"]["area"], "Admin & bills")
+        self.assertEqual((out["Ring the tandlæge"]["kind"], out["Buy milk"]["source"]), ("admin", "capture"))
 
     def test_capture_token_is_optional(self):
         Config({k: v for k, v in ENV.items() if k != "ONEBOX_CAPTURE_TOKEN"})
@@ -357,7 +362,7 @@ class ServerTests(unittest.TestCase):
                                       {"Authorization": "Bearer " + "c" * 20})[0], 200)
         raw = self.web.req(self.base, "GET", "/api/waiting", headers={"Authorization": "Bearer " + "c" * 20})[1]
         self.assertEqual(json.loads(raw)["items"], [])
-        self.assertEqual([i["id"] for i in self.outbox()], [ITEM["id"]])
+        self.assertEqual([t["title"] for t in self.tasks()], [ITEM["task"]])
 
     def test_official_post_is_a_mailbox(self):
         W, C = {"X-OneInbox-Token": "w" * 20}, {"Authorization": "Bearer " + "c" * 20}
@@ -406,8 +411,9 @@ class ServerTests(unittest.TestCase):
         code, raw = self.web.req(self.base, "POST", "/api/capture", {"text": "errand: pick up frames"},
                                  {"Authorization": "Bearer " + "c" * 20})
         self.assertEqual((code, json.loads(raw)["when"]), (200, "Anytime"))
-        out = self.outbox()[0]
-        self.assertEqual((out["task"], out["when"], out["tags"]), ("Pick up frames", "anytime", ["Errands"]))
+        self.assertIn("Pocket Pal", json.loads(raw)["message"])
+        [out] = self.tasks()
+        self.assertEqual((out["title"], out["list"], out["tags"]), ("Pick up frames", "anytime", ["Errands"]))
 
     def test_capture_on_a_named_day(self):
         code, raw = self.web.req(self.base, "POST", "/api/capture", {"text": "Dentist on 2099-11-02 at 9"},
@@ -415,7 +421,30 @@ class ServerTests(unittest.TestCase):
         body = json.loads(raw)
         self.assertEqual((code, body["when"]), (200, "Mon 2 Nov at 09:00"))
         self.assertIn("for Mon 2 Nov at 09:00", body["message"])
-        self.assertEqual(self.outbox()[0]["when"], "2099-11-02@09:00")
+        [out] = self.tasks()
+        self.assertEqual((out["when"], out["list"]), ("2099-11-02", "upcoming"))
+
+    def test_agent_todos_and_adopting_things(self):
+        todos = [{"title": "19:00 Live session", "when": "2026-11-09@18:45", "tags": ["MSc"], "list": "York MSc"},
+                 {"title": "Essay (due Fri 13 Nov)", "when": "2026-11-06@08:00", "deadline": "2026-11-13"},
+                 {"title": ""}]
+        self.assertEqual(self.web.req(self.base, "POST", "/api/agent/todos", {"todos": todos},
+                                      {"Authorization": "Bearer " + "c" * 20})[0], 401)
+        code, raw = self.web.req(self.base, "POST", "/api/agent/todos", {"source": "calendar", "todos": todos}, self.agent)
+        self.assertEqual((code, json.loads(raw)["added"]), (200, 2))
+        got = {t["title"]: t for t in self.tasks()}
+        live = got["19:00 Live session"]
+        self.assertEqual((live["kind"], live["when"], live["project"], live["source"]),
+                         ("msc", "2026-11-09", "York MSc", "calendar"))
+        self.assertEqual(got["Essay (due Fri 13 Nov)"]["due"], "2026-11-13")
+        # Things' copies become the Pi's own when the Mac stops mirroring Things
+        self.ingest(things={"left": 1, "all": [{"id": "T1", "title": "Own to-do", "kind": "admin", "list": "today"}]})
+        self.web.req(self.base, "POST", "/api/tasks/T1/done", {}, {"Authorization": "Bearer " + "c" * 20})
+        self.ingest(things={"left": 1, "all": [{"id": "T2", "title": "Another", "kind": "body", "list": "anytime"}]})
+        self.web.req(self.base, "POST", "/api/ingest", {"items": [], "things": {"left": 0}, "adopt_things": True}, self.agent)
+        self.assertEqual({t["id"]: t["source"] for t in self.tasks() if t["id"].startswith("T")}, {"T2": "app"})
+        box = json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])
+        self.assertEqual(box["ids"], [])  # nothing left to carry back to Things
 
     def test_pal_round_trip(self):
         W = {"X-OneInbox-Token": "w" * 20}
