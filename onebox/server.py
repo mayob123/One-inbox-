@@ -206,7 +206,8 @@ def make_handler(cfg: Config, store: Store):
                         return self._send(401)
                     decision = self._body().get("decision")
                     if not store.decide(m.group(1), decision):
-                        return self._json(409, {"error": "Already sent to Things, or no such item."})
+                        return self._json(409, {"error": "Already on your to-do list, or no such item."})
+                    store.outbox_to_tasks(self._now().date())  # "add" puts it on Pocket Pal's list at once
                     return self._json(200, {"ok": True})
                 if path == "/api/capture":
                     if not self._capture_ok():
@@ -217,9 +218,12 @@ def make_handler(cfg: Config, store: Store):
                         return self._json(400, {"error": f"Send 1 to {MAX_CAPTURE} characters of text."})
                     item = capture(text, self._now(), {k: body.get(k) for k in ("when", "tags", "list", "deadline")})
                     store.upsert_items([item])
+                    made = store.outbox_to_tasks(self._now().date())  # straight onto Pocket Pal's list, no Mac
                     where = when_label(item.get("when"))
+                    place = where if where in ("Today", "Anytime", "Someday", "Tomorrow", "Evening") else "for " + where
                     return self._json(200, {"ok": True, "id": item["id"], "task": item["task"], "when": where,
-                                            "message": f"Got it. It goes to Things {where if where in ('Today', 'Anytime', 'Someday', 'Tomorrow', 'Evening') else 'for ' + where} on your next Mac sync."})
+                                            "task_id": made[-1]["id"] if made else None,
+                                            "message": f"Got it. It's on your Pocket Pal list {place}."})
                 if path == "/api/quiet/remove":
                     if not self._ui_ok():
                         return self._send(401)
@@ -310,8 +314,19 @@ def make_handler(cfg: Config, store: Store):
                         for source, at in (status.pop("post_done", None) or {}).items():
                             store.check_post(source, at)  # Ben ticked "Check Aula" in Things
                         store.set_meta("things_status", status)
+                    if body.get("adopt_things"):  # Pocket Pal went separate: Things' copies become the Pi's own
+                        store.adopt_things()
+                    store.outbox_to_tasks(self._now().date())  # automatic Aula/e-Boks/homework items
                     store.set_meta("last_sync", self._now().isoformat(timespec="seconds"))
                     return self._json(200, {"ok": True, "items": n})
+                if path == "/api/agent/todos":  # calendar and job deadlines from the Mac, onto the Pi's list
+                    if not self._agent_ok():
+                        return self._send(401)
+                    body = self._body()
+                    source = body.get("source") if body.get("source") in ("calendar", "inbox") else "inbox"
+                    todos = body.get("todos") if isinstance(body.get("todos"), list) else []
+                    made = store.add_todos(todos, source, self._now().date())
+                    return self._json(200, {"ok": True, "added": len(made)})
                 if path == "/api/outbox/ack":
                     if not self._agent_ok():
                         return self._send(401)

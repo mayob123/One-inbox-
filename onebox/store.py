@@ -7,7 +7,9 @@ import secrets
 import sqlite3
 from pathlib import Path
 import threading
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+
+from .todos import task_from_todo, todo_from_item
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
@@ -217,6 +219,41 @@ class Store:
             self.db.commit()
         return n
 
+    def outbox_to_tasks(self, today: date) -> list[dict]:
+        """Everything that used to wait here for the Mac to add to Things (emails Ben added, captures, the
+        automatic Aula/e-Boks/homework items) goes on the Pi's own to-do list instead. Returns the new to-dos."""
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT id, data FROM items WHERE decision='add' AND sent_to_things_at IS NULL").fetchall()
+        made = []
+        for r in rows:
+            item = json.loads(r["data"])
+            fields = task_from_todo(todo_from_item(item), today)
+            if fields:
+                made.append(self.add_task(fields, "capture" if item.get("source") == "capture" else "inbox"))
+            self.ack_outbox([r["id"]])
+        return made
+
+    def add_todos(self, todos: list[dict], source: str, today: date) -> list[dict]:
+        """Things-shaped to-dos from the Mac (calendar and job deadlines) onto the Pi's list."""
+        made = []
+        for attrs in todos[:100]:
+            fields = task_from_todo(attrs, today) if isinstance(attrs, dict) else None
+            if fields:
+                made.append(self.add_task(fields, source))
+        return made
+
+    def adopt_things(self) -> int:
+        """Pocket Pal goes separate: the open to-dos copied from Things become the Pi's own, so the app can change
+        them freely and nothing waits to be carried back to Things."""
+        with self.lock:
+            n = self.db.execute("UPDATE tasks SET source='app', updated_at=? WHERE source='things' AND status='open'",
+                                (now_iso(),)).rowcount
+            self.db.execute("UPDATE todo_actions SET synced_at=? WHERE synced_at IS NULL", (now_iso(),))
+            self.db.execute("UPDATE task_edits SET synced_at=? WHERE synced_at IS NULL", (now_iso(),))
+            self.db.commit()
+        return n
+
     # --- XP: one point per Things to-do Ben completes, counted once -------
 
     def record_completed(self, uuids: list[str]) -> int:
@@ -411,16 +448,17 @@ class Store:
             r = self.db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
         return self._task(r) if r else None
 
-    def add_task(self, fields: dict) -> dict:
-        """A to-do made in Pocket Pal, kept on the Pi only (Things doesn't get it)."""
+    def add_task(self, fields: dict, source: str = "app") -> dict:
+        """A to-do on the Pi's own list (Things never gets it): made in Pocket Pal ("app"), or by One Inbox
+        from an email, a capture or a calendar or job deadline ("inbox", "capture", "calendar")."""
         ts = now_iso()
         tid = "pp-" + secrets.token_hex(6)
         with self.lock:
             self.db.execute(
                 """INSERT INTO tasks (id, source, title, notes, kind, list, when_day, due, tags, project, status,
                                       created_at, updated_at)
-                   VALUES (?, 'app', ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)""",
-                (tid, fields["title"], fields.get("notes"), fields.get("kind"), fields.get("list"),
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)""",
+                (tid, source, fields["title"], fields.get("notes"), fields.get("kind"), fields.get("list"),
                  fields.get("when_day"), fields.get("due"), json.dumps(fields.get("tags") or []),
                  fields.get("project"), ts, ts))
             self.db.commit()
