@@ -1002,20 +1002,25 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
     else:
         report["mail"] = "Mail index not found. Is Full Disk Access on?"
     payload: dict = {"items": items}
-    things_db = cfg.get("things_db") or newest(THINGS_GLOB)
-    if things_db:
+    reads_things = cfg.get("things_mirror", True)
+    things_db = (cfg.get("things_db") or newest(THINGS_GLOB)) if reads_things else None
+    if not reads_things:
+        # Cut off from Things (2026-11-08): Things isn't opened at all. The Pi makes Today and the pillars from
+        # its own list, and the copies it already has of Things' to-dos become its own.
+        status = {"at": now.isoformat(timespec="seconds"), "todos": "pi"}
+        payload["adopt_things"] = True
+    elif things_db:
         status = things_status(things_db, now)
         status["pillars"] = things_pillars(things_db, now)
-        if cfg.get("things_mirror", True):  # off: Pocket Pal keeps its own list and stops copying Things'
-            status["all"] = things_all(things_db, now)
-        else:
-            payload["adopt_things"] = True
+        status["all"] = things_all(things_db, now)
+    if not reads_things or things_db:
         status["friends_overdue"] = friends_overdue(cfg.get("messages_db", MESSAGES_DB), cfg.get("friends", []), now)
         status["events"], report["calendar"] = read_calendar(cfg, now)
         report["job_tracker"] = read_job_tracker(cfg, status, now)
         payload["things"] = status
         report["things"] = {k: v for k, v in status.items() if k not in ("completed_ids", "pool", "week", "later", "all")}
-        report["small_jobs"], report["this_week"] = len(status["pool"]), len(status["week"])
+        if reads_things:
+            report["small_jobs"], report["this_week"] = len(status["pool"]), len(status["week"])
     if dry_run:
         report["would_send"] = len(items)
         if cfg.get("calendars") or cfg.get("deadlines") or cfg.get("study") or job_deadlines(cfg, now):
@@ -1034,7 +1039,7 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
         call(cfg["server"], cfg["token"], "POST", "/api/outbox/ack", {"ids": [i["id"] for i in outbox]})
     report["added_to_things"] = len(outbox)
     report["completed_in_things"] = complete_in_things(cfg)
-    if things_db:
+    if things_db and reads_things:
         report["post_in_things"] = sync_post(cfg, things_db)
         report["post_tidied"] = tidy_post(cfg, things_db)
         report["tagged_in_things"] = tag_in_things(cfg, things_db)

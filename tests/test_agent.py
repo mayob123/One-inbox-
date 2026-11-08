@@ -215,6 +215,22 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(report["mail"]["done"], 1)
         self.assertEqual(report["things"]["left"], 2)
 
+    def test_cut_off_from_things_never_opens_it(self):
+        cfg = {"mail_db": self.mail, "things_db": self.things, "days": 21, "messages_db": "/nonexistent",
+               "things_mirror": False, "job_tracker_db": "", "server": "http://pi", "token": "t"}
+        with mock.patch.object(agent, "ro_connect", wraps=agent.ro_connect) as opened, \
+                mock.patch.object(agent, "call", return_value={}) as call, \
+                mock.patch.object(agent, "wake_mail", return_value=False), \
+                mock.patch.object(agent.subprocess, "run") as run:
+            report = agent.run_once(cfg, now=NOW)
+        self.assertNotIn(self.things, [c.args[0] for c in opened.call_args_list])
+        run.assert_not_called()
+        body = call.call_args_list[0].args[4]
+        self.assertTrue(body["adopt_things"])
+        self.assertEqual(body["things"]["todos"], "pi")
+        self.assertNotIn("today", body["things"])
+        self.assertEqual(report["things_writes"], "off")
+
     def test_next_events(self):
         cal = os.path.join(self.dir.name, "Calendar.sqlitedb")
         make_calendar(cal)

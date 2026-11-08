@@ -446,6 +446,32 @@ class ServerTests(unittest.TestCase):
         box = json.loads(self.web.req(self.base, "GET", "/api/todo/outbox", headers=self.agent)[1])
         self.assertEqual(box["ids"], [])  # nothing left to carry back to Things
 
+    def test_feed_from_the_pis_own_list_once_things_is_cut_off(self):
+        W, C = {"X-OneInbox-Token": "w" * 20}, {"Authorization": "Bearer " + "c" * 20}
+        today = datetime.now().date()
+        soon = (today + timedelta(days=3)).isoformat()
+        for body in ({"title": "Pay rent", "kind": "bill", "when": "today", "due": soon},
+                     {"title": "Danish homework", "kind": "danish", "when": "today"},
+                     {"title": "Buy bulbs", "kind": "admin", "tags": ["Errands"]},
+                     {"title": "Read paper", "kind": "msc", "when": soon, "due": soon}):
+            self.assertEqual(self.web.req(self.base, "POST", "/api/tasks", body, C)[0], 201)
+        status = {"todos": "pi", "events": [], "friends_overdue": 0,
+                  "pillars": {"job": {"done_week": 0, "open": 0, "last_done": None, "next_due": None, "leads": 4}}}
+        self.web.req(self.base, "POST", "/api/ingest", {"items": [], "things": status, "adopt_things": True}, self.agent)
+        f = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers=W)[1])
+        self.assertEqual((f["left"], f["next"], f["kind"]), (2, "Pay rent", "bill"))
+        self.assertEqual([i["title"] for i in f["items"]], ["Pay rent", "Danish homework"])
+        self.assertEqual([p["title"] for p in f["pool"]], ["Buy bulbs"])
+        self.assertEqual([w["title"] for w in f["week"]], ["Read paper"])
+        self.assertEqual({r["title"] for r in f["later"]}, {"Buy bulbs", "Read paper"})
+        self.assertEqual((f["pillars"]["danish"]["open"], f["pillars"]["job"]["leads"]), (1, 4))
+        # ticking it on the watch finishes the Pi's to-do itself
+        code, raw = self.web.req(self.base, "POST", "/api/todo/done", {"id": f["now_id"]}, W)
+        self.assertEqual((code, json.loads(raw)["next"]), (200, "Danish homework"))
+        self.assertNotIn("Pay rent", [t["title"] for t in self.tasks()])
+        f = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers=W)[1])
+        self.assertEqual((f["done"], f["pillars"]["bill"]["done_week"], f["xp"]), (1, 1, 1))
+
     def test_pal_round_trip(self):
         W = {"X-OneInbox-Token": "w" * 20}
         body = {"at": 1793000000, "pose": "proud", "focus": None, "line": "ALL PILLARS ON TRACK",
