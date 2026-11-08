@@ -23,7 +23,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
-from . import feed, mailpoll, picalendar
+from . import feed, friends, mailpoll, picalendar
 from .pihole import PiHole
 from .store import Store
 from .triage import POST_SOURCES, capture, when_label
@@ -68,6 +68,7 @@ def _same(a: str, b: str) -> bool:
 def make_handler(cfg: Config, store: Store):
     ui_cookie_value = hashlib.sha256(("onebox:" + cfg.ui_key).encode()).hexdigest()
     pihole = PiHole(cfg.pihole_url, cfg.pihole_password)
+    friends.ensure(store)  # the friends tables sit beside the store's own
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "OneInbox/1"
@@ -124,9 +125,9 @@ def make_handler(cfg: Config, store: Store):
         def _status(self) -> dict:
             """The Mac's last report, with Today and the pillars from the Pi's own list once Things is cut off."""
             status = store.get_meta("things_status", {})
-            if status.get("todos") != "pi":
-                return status
-            return feed.with_tasks(status, store.tasks(), store.tasks("done"), self._now())
+            if status.get("todos") == "pi":
+                status = feed.with_tasks(status, store.tasks(), store.tasks("done"), self._now())
+            return friends.with_friends(status, store, self._now())
 
         # --- routes ----------------------------------------------------
         def do_GET(self):
@@ -165,6 +166,10 @@ def make_handler(cfg: Config, store: Store):
                 waiting = [{k: i[k] for k in keep if i.get(k)} for i in store.items()
                            if i["status"] == "decide" and not i["decision"] and not i.get("post")]
                 return self._json(200, {"items": waiting})
+            if path == "/api/friends":
+                if not (self._todo_ok() or self._agent_ok()):
+                    return self._send(401)
+                return self._json(200, friends.listing(store, self._now()))
             if path == "/api/pihole":
                 if not self._todo_ok():
                     return self._send(401)
@@ -349,6 +354,47 @@ def make_handler(cfg: Config, store: Store):
                     todos = body.get("todos") if isinstance(body.get("todos"), list) else []
                     made = store.add_todos(todos, source, self._now().date())
                     return self._json(200, {"ok": True, "added": len(made)})
+                if path == "/api/friends":
+                    if not self._capture_ok():
+                        return self._send(401)
+                    made = friends.add(store, friends.clean(self._body(), new=True))
+                    return self._json(201, {"ok": True, "friend": made, **friends.listing(store, self._now())})
+                m = re.fullmatch(r"/api/friends/([0-9a-f]{12})(?:/(saw|spoke|undo|remove))?", path)
+                if m:
+                    if not self._capture_ok():
+                        return self._send(401)
+                    fid, action = m.group(1), m.group(2)
+                    body = self._body()
+                    if action in friends.TAPS:
+                        at = self._now()
+                        if body.get("on"):  # "saw her on Saturday": that day, at noon
+                            day = date.fromisoformat(str(body["on"]))
+                            if not self._now().date() - timedelta(days=366) <= day <= self._now().date():
+                                return self._json(400, {"error": "on must be a day in the last year"})
+                            at = datetime.combine(day, datetime.min.time(), cfg.tz).replace(hour=12)
+                        ok = friends.log(store, fid, action, at)
+                    elif action == "undo":
+                        ok = friends.undo(store, fid)
+                    elif action == "remove":
+                        ok = friends.remove(store, fid)
+                    else:
+                        ok = friends.edit(store, fid, friends.clean(body, new=False))
+                    if not ok:
+                        return self._json(404, {"error": "No friend with that id, or nothing to undo."})
+                    return self._json(200, {"ok": True, **friends.listing(store, self._now())})
+                if path == "/api/agent/friends":  # from the Mac: last iMessage per friend, calendar events
+                    if not self._agent_ok():
+                        return self._send(401)
+                    body = self._body()
+                    out = {"ok": True, "seeded": friends.seed(store, body.get("seed") or [])}
+                    out["messages"] = friends.record_messages(store, body.get("messages") or [])
+                    if isinstance(body.get("events"), list):
+                        win = body.get("window") or {}
+                        lo, hi = friends._parse(win.get("from")), friends._parse(win.get("to"))
+                        out["events"] = friends.match_events(store, body["events"], self._now(), "mac",
+                                                             (lo, hi) if lo and hi else None)
+                    out["friends"] = friends.rows(store)  # names and handles, for the Mac's next look in Messages
+                    return self._json(200, out)
                 if path == "/api/outbox/ack":
                     if not self._agent_ok():
                         return self._send(401)

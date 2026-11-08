@@ -33,6 +33,7 @@ import urllib.request
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
+from . import friends as friendlist
 from . import studycal
 from .triage import JOB_ALERT_SENDERS, JOB_ALERTS, Message, grade_post, summary, triage, want_details
 
@@ -696,6 +697,20 @@ def read_job_tracker(cfg: dict, status: dict, now: datetime) -> str:
 
 # --- Friends (Messages) ---------------------------------------------------
 
+def last_message(con, handles: list[str]) -> datetime | None:
+    """When Ben last messaged with any of these phone numbers or emails, either way."""
+    if not handles:
+        return None
+    q = ",".join("?" * len(handles))
+    last = con.execute(
+        f"SELECT MAX(m.date) FROM message m JOIN handle h ON h.ROWID = m.handle_id WHERE h.id IN ({q})",
+        handles).fetchone()[0]
+    if last is None:
+        return None
+    secs = last / 1e9 if last > 1e12 else last  # newer macOS stores nanoseconds
+    return APPLE_EPOCH + timedelta(seconds=secs)
+
+
 def friends_overdue(chat_db: str, friends: list[dict], now: datetime) -> int:
     """friends: [{"name": "Tom", "every_days": 21, "handles": ["+4512345678", "tom@x.com"]}]"""
     if not friends or not os.path.exists(chat_db):
@@ -707,20 +722,83 @@ def friends_overdue(chat_db: str, friends: list[dict], now: datetime) -> int:
             handles = f.get("handles") or []
             if not handles:
                 continue
-            q = ",".join("?" * len(handles))
-            last = con.execute(
-                f"SELECT MAX(m.date) FROM message m JOIN handle h ON h.ROWID = m.handle_id WHERE h.id IN ({q})",
-                handles).fetchone()[0]
-            if last is None:
-                late += 1
-                continue
-            secs = last / 1e9 if last > 1e12 else last  # newer macOS stores nanoseconds
-            last_dt = APPLE_EPOCH + timedelta(seconds=secs)
-            if (now - last_dt).days > int(f.get("every_days", 30)):
+            last_dt = last_message(con, handles)
+            if last_dt is None or (now - last_dt).days > int(f.get("every_days", 30)):
                 late += 1
     finally:
         con.close()
     return late
+
+
+def friend_messages(chat_db: str, friends: list[dict]) -> list[dict]:
+    """[{"id": friend id, "at": iso}] for each friend on the Pi's list with a message in Messages."""
+    if not friends or not os.path.exists(chat_db):
+        return []
+    con = ro_connect(chat_db)
+    out = []
+    try:
+        for f in friends:
+            at = last_message(con, f.get("handles") or [])
+            if at:
+                out.append({"id": f["id"], "at": at.isoformat(timespec="seconds")})
+    finally:
+        con.close()
+    return out
+
+
+FRIEND_DAYS_BACK, FRIEND_DAYS_AHEAD = 30, 30
+
+
+def friend_events(db_path: str, friends: list[dict], lo: datetime, hi: datetime, skip: tuple) -> list[dict]:
+    """Calendar events between lo and hi with a friend's name in the title. Only those leave the Mac."""
+    con = ro_connect(db_path)
+    try:
+        rows = con.execute(
+            """SELECT ci.summary AS title, COALESCE(oc.occurrence_start_date, oc.occurrence_date) AS start,
+                      COALESCE(c.title, '') AS calendar
+               FROM OccurrenceCache oc
+               JOIN CalendarItem ci ON ci.ROWID = oc.event_id
+               LEFT JOIN Calendar c ON c.ROWID = ci.calendar_id
+               WHERE COALESCE(oc.occurrence_start_date, oc.occurrence_date) >= ?
+                 AND COALESCE(oc.occurrence_start_date, oc.occurrence_date) < ?""",
+            ((lo - APPLE_EPOCH).total_seconds(), (hi - APPLE_EPOCH).total_seconds()),
+        ).fetchall()
+    finally:
+        con.close()
+    out, seen = [], set()
+    for r in rows:
+        if not r["title"] or r["calendar"] in skip or (r["title"], r["start"]) in seen:
+            continue
+        if not any(friendlist.matches(r["title"], f) for f in friends):
+            continue
+        seen.add((r["title"], r["start"]))
+        when = (APPLE_EPOCH + timedelta(seconds=r["start"])).astimezone(lo.tzinfo)
+        out.append({"title": r["title"], "start": when.isoformat(timespec="minutes")})
+    return out
+
+
+def sync_friends(cfg: dict, now: datetime) -> dict:
+    """Tells the Pi about catch-ups only the Mac can see: the last iMessage with each friend, and calendar
+    events naming them. The friends list itself lives on the Pi (Pocket Pal edits it); agent.json's
+    "friends" are sent once to start it off."""
+    try:
+        got = call(cfg["server"], cfg["token"], "POST", "/api/agent/friends", {"seed": cfg.get("friends") or []})
+    except urllib.error.HTTPError as e:
+        return {"error": f"Pi has no friends list yet ({e.code}). Update it."}
+    friends = got.get("friends") or []
+    if not friends:
+        return {"friends": 0}
+    body: dict = {"messages": friend_messages(cfg.get("messages_db", MESSAGES_DB), friends)}
+    path = cfg.get("calendar_db") or next((p for p in CALENDAR_DBS if os.path.exists(p)), None)
+    if path:
+        lo, hi = now - timedelta(days=FRIEND_DAYS_BACK), now + timedelta(days=FRIEND_DAYS_AHEAD)
+        try:
+            body["events"] = friend_events(path, friends, lo, hi, tuple(cfg.get("calendar_skip", CALENDAR_SKIP)))
+            body["window"] = {"from": lo.isoformat(timespec="seconds"), "to": hi.isoformat(timespec="seconds")}
+        except sqlite3.Error:  # Apple changes this schema now and then; messages still go
+            pass
+    sent = call(cfg["server"], cfg["token"], "POST", "/api/agent/friends", body)
+    return {"friends": len(friends), "messages": sent.get("messages", 0), "events": sent.get("events")}
 
 
 # --- Talking to the Pi and to Things --------------------------------------
@@ -1000,6 +1078,9 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
         report["mail"] = "Read by the Pi."
     elif mail_db:
         msgs = read_mail(mail_db, cfg["days"], cfg.get("account_labels"), now)
+        skip = set(cfg.get("mail_skip_accounts") or [])  # accounts the Pi reads itself (Mail's account ids)
+        if skip:
+            msgs = [m for m in msgs if m.msg_id.split(":", 1)[0] not in skip]
         triaged = triage(msgs, now)
         items = [i.to_dict() for i in triaged]
         report["mail"] = summary(triaged)
@@ -1036,6 +1117,10 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
         return report
     call(cfg["server"], cfg["token"], "POST", "/api/ingest", payload)
     report["calendar"] = sync_calendars(cfg, now)
+    try:
+        report["friends"] = sync_friends(cfg, now)
+    except (OSError, ValueError) as e:  # never let friends stop a sync
+        report["friends"] = {"error": str(e)}
     if not writes_things(cfg):
         # Pocket Pal is separate: the Pi puts emails, captures and post on its own list, and nothing is written
         # to Things. Ben's own Things to-dos are left exactly as they are.
