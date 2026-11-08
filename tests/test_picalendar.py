@@ -42,6 +42,27 @@ class PiCalendarTests(unittest.TestCase):
         self.assertEqual(picalendar.sync(self.store, self.cfg, NOW, fetcher=lambda url: ICS)["added"], 0)
         self.assertEqual(len(self.store.tasks()), len(titles))
 
+    def test_york_items_that_came_back_through_things_are_not_doubled(self):
+        first = picalendar.sync(self.store, self.cfg, NOW, fetcher=lambda url: ICS)
+        made = self.store.tasks()
+        # what the old Mac put in Things, copied back and adopted (source app), with an older start day
+        with self.store.lock:
+            self.store.db.execute("UPDATE tasks SET source='app', created_at='2026-10-30T00:00:00+00:00'")
+            self.store.db.commit()
+        for t in made:
+            self.store.add_task({"title": t["title"], "list": "upcoming", "when_day": t.get("when")}, "calendar")
+        self.store.set_meta(picalendar.SEEN_KEY, {})
+        self.assertEqual(picalendar.sync(self.store, self.cfg, NOW, fetcher=lambda url: ICS)["added"], 0)
+        self.assertEqual(len(self.store.tasks()), first["added"])
+        self.assertTrue(all(t["source"] == "app" for t in self.store.tasks()))
+
+    def test_a_file_on_the_mac_is_read_beside_the_settings(self):
+        path = os.path.join(self.dir.name, "onebox-calendars.json")
+        with open(path, "w") as f:
+            json.dump({"calendars": [{"name": "York blocks", "url": "~/.config/onebox/york-blocks.ics"}]}, f)
+        self.assertEqual(picalendar.load(path)["calendars"][0]["url"],
+                         os.path.join(self.dir.name, "onebox-york-blocks.ics"))
+
     def test_broken_feed_is_reported_not_raised(self):
         def boom(url):
             raise OSError("offline")
