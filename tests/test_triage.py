@@ -144,18 +144,53 @@ class HomeworkTests(unittest.TestCase):
 
 
 class AutoAddTests(unittest.TestCase):
-    def test_job_alerts_are_counted_not_folded(self):
+    def test_job_alerts_are_not_post_any_more(self):
         items = triage([msg("Banedanmark: Projektledere til informations- og cybersikkerhed", "jobalerts-noreply@linkedin.com",
                             "LinkedIn Job Alerts", box="Junk"),
                         msg("DTU is hiring a Ledelsessekretær/PA", "jobalerts-noreply@linkedin.com", "LinkedIn Job Alerts"),
                         msg("Have you applied for this job?", "mailservice@jobindex.dk", "Jobindex"),
                         msg("Old alert", "jobalerts-noreply@linkedin.com", days=-10)], T0)
         got = {i.title: (i.status, i.post, i.kind, i.auto) for i in items}
-        self.assertEqual(got["DTU is hiring a Ledelsessekretær/PA"], ("decide", "Job alerts", "job", ""))
-        self.assertEqual(got["Have you applied for this job?"], ("decide", "Job alerts", "job", ""))
-        self.assertEqual(got["Old alert"][1], "")
+        # they become job tracker leads instead, so they don't count on the phone
+        self.assertEqual(got["DTU is hiring a Ledelsessekretær/PA"], ("info", "", "job", ""))
+        self.assertEqual(got["Have you applied for this job?"], ("info", "", "job", ""))
+        self.assertEqual(got["Old alert"][:2], ("info", ""))
         # other LinkedIn mail is still folded away
         self.assertEqual(triage([msg("X is hiring for a Remote role", "jobs-noreply@linkedin.com")], T0)[0].status, "noise")
+
+    def test_post_alerts_get_a_tier(self):
+        items = by_title(triage([
+            msg("Nyt fra Barndommens Land", "noreply@aula.dk", "Aula", mid="a1"),
+            msg("Ny besked fra Mette (Stuen)", "noreply@aula.dk", "Aula", mid="a2"),
+            msg("Du har modtaget ny post fra Skattestyrelsen", "noreply@e-boks.dk", "e-Boks", mid="e1"),
+            msg("Ny lønseddel", "noreply@e-boks.dk", "e-Boks", mid="e2"),
+            msg("Du har ny post", "noreply@mit.dk", "Digital Post", mid="d1"),
+        ], T0))
+        got = {t: (i.tier, i.what) for t, i in items.items()}
+        self.assertEqual(got["Nyt fra Barndommens Land"], ("fyi", "Update"))  # nothing says what it is yet
+        self.assertEqual(got["Ny besked fra Mette (Stuen)"], ("needs", "Message"))
+        self.assertEqual(got["Du har modtaget ny post fra Skattestyrelsen"],
+                         ("needs", "Letter from the authorities: Skattestyrelsen"))
+        self.assertEqual(got["Ny lønseddel"], ("fyi", "Payslip, pension or info"))
+        self.assertEqual(got["Du har ny post"], ("needs", "Letter"))  # unknown sender: safer to look
+
+    def test_post_alert_graded_again_from_its_body(self):
+        from onebox.triage import grade_post
+        it = {"post": "Aula", "title": "Nyt fra Barndommens Land", "excerpt": "Der er nye billeder i galleriet"}
+        grade_post(it)
+        self.assertEqual((it["tier"], it["what"]), ("fyi", "Photos"))
+        it["excerpt"] = "Husk tilmelding til julefrokost senest fredag"
+        grade_post(it)
+        self.assertEqual(it["tier"], "needs")
+
+    def test_post_alerts_get_their_bodies_read_first(self):
+        from onebox.triage import want_details
+        now = T0
+        items = [{"id": f"m{i}", "status": "decide", "received": now.isoformat()} for i in range(5)]
+        items += [{"id": f"p{i}", "status": "decide", "post": "Aula", "received": now.isoformat()} for i in range(40)]
+        got = [i["id"] for i in want_details(items, now, 7, 3)]
+        self.assertEqual(len(got), 43)
+        self.assertEqual(got[-3:], ["m0", "m1", "m2"])
 
     def test_danish_teacher_and_a_kasse_go_to_things(self):
         items = by_title(triage([

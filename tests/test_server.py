@@ -396,6 +396,19 @@ class ServerTests(unittest.TestCase):
         self.assertEqual([(s["source"], s["count"], s["items"][0]["id"]) for s in t["post"]], [("e-Boks", 1, e2["id"])])
         self.assertNotIn("post_done", self.store.get_meta("things_status"))
 
+    def test_fyi_post_can_be_cleared_on_its_own(self):
+        W, C = {"X-OneInbox-Token": "w" * 20}, {"Authorization": "Bearer " + "c" * 20}
+        a1 = dict(ITEM, id="a000000000000011", title="Nyt fra Barndommens Land", post="Aula", kind="school",
+                  from_addr="noreply@aula.dk", received="2026-10-27T08:00:00+01:00", tier="fyi", what="Photos")
+        a2 = dict(a1, id="a000000000000012", tier="needs", what="Message", received="2026-10-27T09:00:00+01:00")
+        self.web.req(self.base, "POST", "/api/ingest", {"items": [a1, a2]}, self.agent)
+        t = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers=W)[1])
+        self.assertEqual([(s["count"], s["needs"], s["fyi"]) for s in t["post"]], [(2, 1, 1)])
+        code, raw = self.web.req(self.base, "POST", "/api/post/checked", {"source": "Aula", "tier": "fyi"}, C)
+        self.assertEqual((code, json.loads(raw)["checked"]), (200, 1))
+        t = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers=W)[1])
+        self.assertEqual([(s["count"], s["needs"], s["items"][0]["what"]) for s in t["post"]], [(1, 1, "Message")])
+
     def test_side_quests_can_be_ticked(self):
         W = {"X-OneInbox-Token": "w" * 20}
         self.ingest(things={"left": 0, "today": [], "pool": [{"id": "J1", "title": "Bulb", "kind": "admin"}],

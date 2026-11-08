@@ -245,10 +245,12 @@ def make_handler(cfg: Config, store: Store):
                 if path == "/api/post/checked":
                     if not self._todo_ok():
                         return self._send(401)
-                    source = str(self._body().get("source") or "")
+                    body = self._body()
+                    source = str(body.get("source") or "")
                     if source not in POST_SOURCES:
                         return self._json(400, {"error": "source must be one of " + ", ".join(POST_SOURCES)})
-                    n = store.check_post(source)
+                    tier = body.get("tier") if body.get("tier") in ("needs", "fyi") else None  # none: all of them
+                    n = store.check_post(source, tier=tier)
                     # tick the rolling "Check Aula (3 new)" to-do too; the Mac completes it in Things
                     for r in self._status().get("today") or []:
                         if r.get("id") and (r.get("title") or "").startswith(f"Check {source} ("):

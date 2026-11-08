@@ -30,7 +30,7 @@ from pathlib import Path
 
 from . import agent
 from .store import Store
-from .triage import JOB_ALERT_SENDERS, Message, normalize_subject, summary, triage
+from .triage import JOB_ALERT_SENDERS, Message, grade_post, normalize_subject, summary, triage, want_details
 
 EVERY = 3 * 60
 DETAIL_DAYS = 7
@@ -230,8 +230,7 @@ def sync(store: Store, cfg: dict, accounts: dict, now: datetime) -> dict:
     try:
         triaged = triage(msgs, now)
         items = [i.to_dict() for i in triaged]
-        want = [it for it in items if it["status"] == "decide"
-                and now - datetime.fromisoformat(it["received"]) <= timedelta(days=DETAIL_DAYS)][:DETAIL_MAX]
+        want = want_details(items, now, DETAIL_DAYS, DETAIL_MAX)
         detailed = 0
         for it in want:
             for r in readers:
@@ -244,6 +243,7 @@ def sync(store: Store, cfg: dict, accounts: dict, now: datetime) -> dict:
                     break
                 if d:
                     it.update(d)
+                    grade_post(it)  # the body says what a post alert is
                     detailed += 1
                 break
     finally:

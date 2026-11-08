@@ -34,7 +34,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 from . import studycal
-from .triage import JOB_ALERT_SENDERS, JOB_ALERTS, Message, summary, triage
+from .triage import JOB_ALERT_SENDERS, JOB_ALERTS, Message, grade_post, summary, triage, want_details
 
 HOME = Path.home()
 MAIL_GLOB = str(HOME / "Library/Mail/V*/MailData/Envelope Index")
@@ -199,8 +199,7 @@ def mail_link(message_id: str) -> str:
 def add_details(items: list[dict], mail_db: str, now: datetime, save_to: Path | None = ICLOUD) -> int:
     """Reads the body of recent emails that need Ben, and copies a homework email's attachments to
     iCloud Drive > One Inbox > <kind> so they open on the phone. Returns how many got details."""
-    want = [it for it in items if it.get("status") == "decide" and it.get("ref", "").count(":") == 1
-            and now - datetime.fromisoformat(it["received"]) <= timedelta(days=DETAIL_DAYS)][:DETAIL_MAX]
+    want = [it for it in want_details(items, now, DETAIL_DAYS, DETAIL_MAX) if it.get("ref", "").count(":") == 1]
     if not want:
         return 0
     rowids = {it["ref"].rsplit(":", 1)[1] for it in want}
@@ -227,6 +226,7 @@ def add_details(items: list[dict], mail_db: str, now: datetime, save_to: Path | 
                 saved.append(f"iCloud Drive > One Inbox > {folder.name} > {dest.name}")
             d["saved"] = saved
         it.update(d)
+        grade_post(it)  # the body says what a post alert is
         n += 1
     return n
 
