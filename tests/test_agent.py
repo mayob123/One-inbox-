@@ -242,6 +242,13 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(call.call_args_list[0].args[4]["items"], [])
         self.assertEqual(report["mail"], "Read by the Pi.")
 
+    def test_mail_skip_accounts_leaves_those_to_the_pi(self):
+        cfg = {"mail_db": self.mail, "things_db": self.things, "days": 21, "messages_db": "/nonexistent"}
+        everything = agent.run_once(cfg, now=NOW, dry_run=True)["mail"]
+        skipped = agent.run_once({**cfg, "mail_skip_accounts": ["ACC1"]}, now=NOW, dry_run=True)["mail"]
+        self.assertGreater(sum(everything.values()), 0)
+        self.assertEqual(sum(skipped.values()), 0)
+
     def test_next_events(self):
         cal = os.path.join(self.dir.name, "Calendar.sqlitedb")
         make_calendar(cal)
