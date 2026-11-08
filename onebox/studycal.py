@@ -14,7 +14,11 @@ event's UID and start time, so a moved session is added again at its new time.
 Config (in ~/.config/onebox/agent.json):
 
   "calendars": [{"name": "York MSc", "url": "webcal://…/calendar.ics", "tags": ["MSc"]}],
-  "deadlines": [{"title": "Module 1 assignment", "due": "2026-12-14", "tags": ["MSc"]}]
+  "deadlines": [{"title": "Module 1 assignment", "due": "2026-12-14", "tags": ["MSc"]}],
+  "study": [{"title": "A&DS Week 2 on Canvas", "on": "2026-11-09", "tags": ["MSc"]}]
+
+A "study" item is a plain to-do on its day (no heads-up), for weekly work that the
+VLE feed doesn't carry, such as each week's lessons and quizzes.
 
 "list" (a Things area or project) and "tags" (existing Things tag names) are both optional.
 
@@ -71,6 +75,8 @@ class Event:
     def is_deadline(self) -> bool:
         if self.extra.get("deadline"):
             return True
+        if self.extra.get("study"):
+            return False
         text = self.title.lower()
         if any(w in text for w in DEADLINE_WORDS):
             return True
@@ -168,6 +174,17 @@ def config_deadlines(items: list[dict], local_tz) -> list[Event]:
     return out
 
 
+def config_study(items: list[dict]) -> list[Event]:
+    """Week-by-week study items: a to-do on the "on" day, not a deadline."""
+    out = []
+    for d in items or []:
+        day = datetime.strptime(d["on"], "%Y-%m-%d").date()
+        out.append(Event(uid=f"study:{d['title']}", title=d["title"], start=day, calendar="config",
+                         list=d.get("list", ""), tags=list(d.get("tags") or []),
+                         description=d.get("notes", ""), extra={"study": True}))
+    return out
+
+
 # --- Turning events into Things to-dos -----------------------------------
 
 def day_of(v: datetime | date) -> date:
@@ -257,6 +274,7 @@ def collect(cfg: dict, now: datetime, fetcher=fetch) -> tuple[list[Event], list[
         except Exception as e:  # one broken feed shouldn't stop mail sync
             errors.append(f"{name}: {e}")
     events += config_deadlines(cfg.get("deadlines"), tz)
+    events += config_study(cfg.get("study"))
     return events, errors
 
 

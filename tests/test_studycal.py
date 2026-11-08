@@ -148,6 +148,20 @@ class TodoTests(unittest.TestCase):
         self.assertTrue(ev.is_deadline)
         self.assertEqual(studycal.todos_for(ev, NOW.date())[0]["deadline"], "2026-12-14")
 
+    def test_study_items_land_on_their_day(self):
+        cfg = {"study": [{"title": "A&DS Week 2 on Canvas", "on": "2026-11-09", "tags": ["MSc"]},
+                         {"title": "A&DS Week 5 on Canvas", "on": "2026-11-30", "tags": ["MSc"]},
+                         {"title": "Week 1 Review quiz", "on": "2026-11-03"}]}
+        events, errors = studycal.collect(cfg, NOW)
+        self.assertEqual(errors, [])
+        self.assertFalse(any(ev.is_deadline for ev in events))
+        due = studycal.due_now(events, {}, NOW)  # sessions: up to two weeks ahead
+        self.assertEqual([ev.title for ev in due], ["Week 1 Review quiz", "A&DS Week 2 on Canvas"])
+        [todo] = studycal.todos_for(due[1], NOW.date())
+        self.assertEqual(todo["when"], "2026-11-09")
+        self.assertEqual(todo["tags"], ["MSc"])
+        self.assertNotIn("deadline", todo)
+
     def test_tags_from_config_reach_things(self):
         cfg = {"calendars": [{"name": "York MSc", "url": "feed", "tags": ["MSc"]}],
                "deadlines": [{"title": "Register for module", "due": "2026-12-01", "tags": ["MSc"]}]}
