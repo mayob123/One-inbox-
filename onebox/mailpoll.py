@@ -264,11 +264,15 @@ def sync(store: Store, cfg: dict, accounts: dict, now: datetime) -> dict:
 def loop(path: str, store: Store, tz, stop: threading.Event | None = None) -> None:
     stop = stop or threading.Event()
     accounts: dict = {}
+    first = True
     while True:
         try:
             got = sync(store, load(path), accounts, datetime.now(tz))
-            if got.get("errors"):
-                print(f"One Inbox mail: {got['errors']}", flush=True)
+            if got.get("errors") or (first and got):
+                # counts only (how many emails, details, claimed), never a subject or address
+                print(f"One Inbox mail: {got.get('mail')}, details {got.get('details')}, kept the Mac's ids "
+                      f"for {got.get('claimed')}, errors {got.get('errors')}", flush=True)
+                first = False
         except Exception as e:  # never take the server down
             print(f"One Inbox mail failed: {e}", flush=True)
         if stop.wait(EVERY):
