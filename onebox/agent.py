@@ -1073,6 +1073,9 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
         report["mail"] = "Read by the Pi."
     elif mail_db:
         msgs = read_mail(mail_db, cfg["days"], cfg.get("account_labels"), now)
+        skip = set(cfg.get("mail_skip_accounts") or [])  # accounts the Pi reads itself (Mail's account ids)
+        if skip:
+            msgs = [m for m in msgs if m.msg_id.split(":", 1)[0] not in skip]
         triaged = triage(msgs, now)
         items = [i.to_dict() for i in triaged]
         report["mail"] = summary(triaged)
