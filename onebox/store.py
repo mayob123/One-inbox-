@@ -515,6 +515,14 @@ class Store:
             self.db.commit()
         return True
 
+    def close_task(self, task_id: str) -> bool:
+        """Take an open to-do off the list without counting it as done (a double)."""
+        with self.lock:
+            n = self.db.execute("UPDATE tasks SET status='gone', updated_at=? WHERE id=? AND status='open'",
+                                (now_iso(), task_id)).rowcount
+            self.db.commit()
+        return bool(n)
+
     def push_task(self, task_id: str, when: str) -> bool:
         """Not today: set for `when`. A Things to-do is moved in Things by the Mac too."""
         cur = self.task(task_id)
