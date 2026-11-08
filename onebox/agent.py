@@ -1061,6 +1061,8 @@ def calendar_preview(cfg: dict, now: datetime) -> dict:
 
 
 def sync_calendars(cfg: dict, now: datetime) -> dict:
+    if cfg.get("calendars_on_pi"):  # the Pi fetches the York feed and study plan itself; only job deadlines here
+        cfg = {k: v for k, v in cfg.items() if k not in ("calendars", "deadlines", "study")}
     jobs = job_deadlines(cfg, now)
     if not cfg.get("calendars") and not cfg.get("deadlines") and not cfg.get("study") and not jobs:
         return {}
