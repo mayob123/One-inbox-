@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from .triage import grade_post
+
 FEED_VERSION = 1
 NEXT_MAX = 20
 KINDS = {"bill", "school", "admin", "msc", "job", "danish", "friend", "body", "travel", "other"}
@@ -192,6 +194,9 @@ def post_summary(items: list[dict], now: datetime) -> list[dict]:
             continue
         if received.tzinfo and now.tzinfo and now - received > timedelta(days=POST_DAYS):
             continue
+        if not it.get("tier"):  # stored before alerts were graded (or not re-read since): grade it now
+            it = dict(it)
+            grade_post(it)
         groups.setdefault(src, []).append(it)
     out = []
     for src, rows in sorted(groups.items()):

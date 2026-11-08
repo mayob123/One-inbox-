@@ -62,7 +62,15 @@ class FeedTests(unittest.TestCase):
         self.assertEqual([(s["source"], s["count"]) for s in out], [("Aula", 2), ("e-Boks", 1)])
         self.assertEqual((out[0]["since"], out[0]["latest"]), (items[0]["received"], "Ny besked 2"))
         self.assertEqual([i["id"] for i in out[0]["items"]], ["p1", "p2"])
-        self.assertEqual((out[0]["needs"], out[0]["fyi"], out[0]["items"][0]["tier"]), (2, 0, "needs"))
+        self.assertEqual((out[0]["needs"], out[0]["fyi"], out[0]["items"][0]["tier"]), (2, 0, "needs"))  # "besked"
+
+    def test_post_stored_before_tiers_is_graded_on_the_fly(self):
+        now = datetime(2026, 11, 8, 20, 0, tzinfo=timezone.utc)
+        old = {"id": "a1", "status": "decide", "post": "Aula", "title": "Nyt fra Barndommens Land", "decision": None,
+               "received": (now - timedelta(days=2)).isoformat()}
+        out = post_summary([old], now)[0]
+        self.assertEqual((out["needs"], out["fyi"], out["items"][0]["what"]), (0, 1, "Update · Barndommens Land"))
+        self.assertNotIn("tier", old)  # the stored item isn't changed
 
     def test_post_summary_counts_needs_and_fyi(self):
         now = datetime(2026, 11, 8, 18, 0, tzinfo=timezone.utc)
