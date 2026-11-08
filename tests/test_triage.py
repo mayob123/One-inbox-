@@ -167,18 +167,23 @@ class AutoAddTests(unittest.TestCase):
             msg("Du har ny post", "noreply@mit.dk", "Digital Post", mid="d1"),
         ], T0))
         got = {t: (i.tier, i.what) for t, i in items.items()}
-        self.assertEqual(got["Nyt fra Barndommens Land"], ("fyi", "Update"))  # nothing says what it is yet
+        self.assertEqual(got["Nyt fra Barndommens Land"], ("fyi", "Update · Barndommens Land"))  # nothing says what yet
         self.assertEqual(got["Ny besked fra Mette (Stuen)"], ("needs", "Message"))
         self.assertEqual(got["Du har modtaget ny post fra Skattestyrelsen"],
                          ("needs", "Letter from the authorities: Skattestyrelsen"))
         self.assertEqual(got["Ny lønseddel"], ("fyi", "Payslip, pension or info"))
+        payslip = triage([msg("Du har fået ny post fra Din arbejdsgiver", "besked@advisering.e-boks.dk", "e-Boks")], T0)[0]
+        self.assertEqual((payslip.post, payslip.tier, payslip.what),
+                         ("e-Boks", "fyi", "Payslip, pension or info: Din arbejdsgiver"))
+        kk = triage([msg("Du har fået ny Digital Post fra Københavns Kommune", "noreply@digitalpost.dk", "Digital Post")], T0)[0]
+        self.assertEqual((kk.post, kk.tier, kk.what), ("Digital Post", "needs", "Letter from the authorities: Københavns Kommune"))
         self.assertEqual(got["Du har ny post"], ("needs", "Letter"))  # unknown sender: safer to look
 
     def test_post_alert_graded_again_from_its_body(self):
         from onebox.triage import grade_post
         it = {"post": "Aula", "title": "Nyt fra Barndommens Land", "excerpt": "Der er nye billeder i galleriet"}
         grade_post(it)
-        self.assertEqual((it["tier"], it["what"]), ("fyi", "Photos"))
+        self.assertEqual((it["tier"], it["what"]), ("fyi", "Photos · Barndommens Land"))
         it["excerpt"] = "Husk tilmelding til julefrokost senest fredag"
         grade_post(it)
         self.assertEqual(it["tier"], "needs")

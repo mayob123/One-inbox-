@@ -249,11 +249,12 @@ POST_KINDS = {
          r"styrelsen|nyidanmark|siri\b|folkeregister|cpr", "Letter from the authorities", "needs"),
         (r"a-kasse|akademikernes|\baka\b", "A-kasse", "needs"),
         (r"hospital|sygehus|region |læge|tandlæge|vaccin", "Health", "needs"),
-        (r"lønseddel|lønsedler|payslip|pension|nyhedsbrev|newsletter|kontoudtog|depot|årsoversigt|"
+        (r"arbejdsgiver|lønseddel|lønsedler|payslip|pension|nyhedsbrev|newsletter|kontoudtog|depot|årsoversigt|"
          r"kvittering|receipt|bekræftelse|velkommen|information om", "Payslip, pension or info", "fyi"),
     ],
 }
 POST_DEFAULT = {"Aula": ("Update", "fyi")}
+AULA_FROM = re.compile(r"^\s*nyt fra (.+?)\s*$", re.I)  # "Nyt fra Barndommens Land": the school or daycare
 SENT_BY = re.compile(r"(?:fra|from|afsender:?)\s+([A-ZÆØÅ][\w&.\- ]{2,40}?)(?:[.,:\n]|\s{2}|$)")
 POST_DETAIL_DAYS = 14  # alerts this new always get their body read, so they can be graded
 
@@ -271,7 +272,11 @@ def grade_post(item) -> None:
         if re.search(pattern, text, re.I):
             what, tier = w, t
             break
-    if source != "Aula":
+    if source == "Aula":
+        place = AULA_FROM.match(get("title", "") or "")
+        if place:
+            what = f"{what} · {place.group(1)}"
+    else:
         who = SENT_BY.search(text)
         if who and who.group(1).strip().lower() not in {"e-boks", "digital post", "mit.dk"}:
             what = f"{what}: {who.group(1).strip()}" if what != "Letter" else f"Letter from {who.group(1).strip()}"

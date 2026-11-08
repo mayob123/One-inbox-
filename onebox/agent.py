@@ -124,6 +124,9 @@ EXCERPT_MAX = 1200
 LINKS_MAX = 12
 URL = re.compile(r"https?://[^\s<>\"')\]]+")
 SKIP_LINK = re.compile(r"unsubscribe|afmeld|\.(png|jpe?g|gif)(\?|$)|/track/|list-manage|mailchimp", re.I)
+# A text part that only says to view the HTML one ("Denne email kan ikke vises da den indeholder HTML…").
+HTML_ONLY_NOTE = re.compile(r"kan ikke vises da den indeholder HTML|understøtter (ikke )?visning af HTML|"
+                            r"does not support HTML|view this (e-?mail|message) in (a|your) browser", re.I)
 # Where a reply's quoted history starts: "On Tue, ... wrote:", "Den ... skrev ...:", a ">" line, Outlook's "From:".
 HTML_QUOTE = re.compile(r'<blockquote|class="gmail_quote|id="divRplyFwdMsg|id="appendonsend', re.I)
 QUOTE = re.compile(r"^(On .+wrote:|Den .+skrev.*:|>|-----Original Message|From: .+|Fra: .+)", re.M)
@@ -174,6 +177,8 @@ def message_details(msg: email.message.EmailMessage) -> dict:
             rich = text
     q = HTML_QUOTE.search(rich)
     rich = rich[:q.start()] if q else rich
+    if rich and HTML_ONLY_NOTE.search(plain):  # Aula's text part only says "this email needs HTML"
+        plain = ""
     if not plain and rich:
         plain = html.unescape(re.sub(r"<[^>]+>", " ", re.sub(r"(?is)<(style|script).*?</\1>|<br\s*/?>|</p>", "\n", rich)))
     m = QUOTE.search(plain)
