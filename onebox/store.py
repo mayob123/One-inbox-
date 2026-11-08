@@ -268,12 +268,16 @@ class Store:
         return added
 
     def xp(self) -> int:
-        """Things completions, plus items ticked on the watch or phone that Things hasn't caught up with."""
+        """Things completions, items ticked on the watch or phone that Things hasn't caught up with, and to-dos
+        done on Pocket Pal's own list, each counted once."""
         with self.lock:
             return self.db.execute(
                 """SELECT (SELECT COUNT(*) FROM completed) +
                           (SELECT COUNT(*) FROM todo_actions WHERE action='done'
-                           AND uuid NOT IN (SELECT uuid FROM completed))""").fetchone()[0]
+                           AND uuid NOT IN (SELECT uuid FROM completed)) +
+                          (SELECT COUNT(*) FROM tasks WHERE status='done'
+                           AND id NOT IN (SELECT uuid FROM completed)
+                           AND id NOT IN (SELECT uuid FROM todo_actions WHERE action='done'))""").fetchone()[0]
 
     # --- to-dos ticked or skipped on the watch or phone ------------------
 

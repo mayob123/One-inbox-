@@ -29,6 +29,11 @@ if ! grep -q '^ONEBOX_CAPTURE_TOKEN=' /etc/onebox.env; then
   echo "Added ONEBOX_CAPTURE_TOKEN for the iPhone Shortcut. Read it with: sudo cat /etc/onebox.env"
 fi
 
+# The York calendar link and the mail app passwords are private: only root and the server may read them.
+for f in /etc/onebox-calendars.json /etc/onebox-mail.json; do
+  if [ -f "$f" ]; then chown root:onebox "$f" && chmod 640 "$f"; fi
+done
+
 install -m 644 deploy/onebox.service /etc/systemd/system/onebox.service
 systemctl daemon-reload
 systemctl enable --now onebox

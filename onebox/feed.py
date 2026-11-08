@@ -246,3 +246,108 @@ def today(status: dict, xp: int, now: datetime, actions: dict | None = None,
             "pool": _rows(status.get("pool"), ("id", "project", "errand", "quick", "someday"), POOL_MAX),
             "later": _rows(status.get("later"), ("id", "when", "due"), LATER_MAX),
             "post": post or []}
+
+
+# --- Pocket Pal's own list as the feed's source (Things cut off, 2026-11-08) ---
+
+SMALL_JOB_PROJECTS = {"around the house"}
+ERRAND_TAGS = {"errands", "errand"}
+QUICK_TAGS = {"5 min", "5min", "quick"}
+TODAY_MAX = 40
+NOTES_MAX = 2000
+PILLAR_DAYS = 60
+
+
+def _local_day(stamp: str | None, now: datetime) -> str | None:
+    try:
+        d = datetime.fromisoformat(str(stamp))
+    except ValueError:
+        return None
+    return (d.astimezone(now.tzinfo) if d.tzinfo and now.tzinfo else d).date().isoformat()
+
+
+def from_tasks(open_tasks: list[dict], done_tasks: list[dict], now: datetime) -> dict:
+    """The Today, small-jobs, this-week, Later and pillar fields of the feed, made from the Pi's own `tasks`
+    table in the shape agent.things_status gave them, so the phone and watch read it unchanged."""
+    today = now.date().isoformat()
+    week_end = (now.date() + timedelta(days=7)).isoformat()
+    monday = (now.date() - timedelta(days=now.weekday())).isoformat()
+    since = (now.date() - timedelta(days=PILLAR_DAYS)).isoformat()
+
+    def kind(t: dict) -> str:
+        return t.get("kind") if t.get("kind") in KINDS else "other"
+
+    def is_today(t: dict) -> bool:
+        return t.get("list") == "today" or bool(t.get("when") and t["when"] <= today and t.get("list") != "someday")
+
+    todays = [t for t in open_tasks if is_today(t)]
+    todays.sort(key=lambda t: (t.get("due") or "9999", t.get("created_at") or ""))
+    rest = [t for t in open_tasks if not is_today(t)]
+    pool = []
+    for t in rest:
+        tags = {str(x).strip().rstrip(".").lower() for x in t.get("tags") or []}
+        errand, quick = bool(tags & ERRAND_TAGS), bool(tags & QUICK_TAGS)
+        if errand or quick or (t.get("project") or "").lower() in SMALL_JOB_PROJECTS:
+            pool.append({"id": t["id"], "title": t["title"], "project": t.get("project"), "kind": kind(t),
+                         "errand": errand, "quick": quick, "someday": t.get("list") == "someday"})
+    week = sorted([t for t in rest if t.get("due") and t["due"] <= week_end], key=lambda t: t["due"])
+    later = [t for t in rest if t.get("list") != "someday"]
+    later.sort(key=lambda t: (t.get("when") is None, t.get("when") or "", t.get("due") is None, t.get("due") or "",
+                              t["title"]))
+    pillars: dict = {}
+
+    def entry(t: dict) -> dict:
+        return pillars.setdefault(kind(t), {"done_week": 0, "open": 0, "last_done": None, "next_due": None})
+
+    for t in open_tasks:
+        if t.get("list") == "someday":
+            continue
+        e = entry(t)
+        e["open"] += 1
+        if t.get("due"):
+            e["next_due"] = min(e["next_due"] or t["due"], t["due"])
+    done_today = 0
+    for t in done_tasks:
+        day = _local_day(t.get("done_at"), now)
+        if not day or day < since:
+            continue
+        e = entry(t)
+        e["done_week"] += day >= monday
+        e["last_done"] = max(e["last_done"] or day, day)
+        done_today += day == today
+    bill = None
+    for t in sorted((t for t in open_tasks if t.get("due") and kind(t) == "bill"), key=lambda t: t["due"]):
+        d = datetime.fromisoformat(t["due"]).date()
+        bill = d.strftime("%a") if 0 <= (d - now.date()).days < 7 else d.strftime("%-d %b")
+        break
+    first = todays[0] if todays else None
+    return {
+        "left": len(todays),
+        "done_today": done_today,
+        "overdue": sum(1 for t in open_tasks if t.get("due") and t["due"] < today),
+        "next": first["title"] if first else None,
+        "next_id": first["id"] if first else None,
+        "next_kind": kind(first) if first else None,
+        "bill": bill,
+        "today": [{"id": t["id"], "title": t["title"], "kind": kind(t), "due": t.get("due"),
+                   "notes": (t.get("notes") or "")[:NOTES_MAX] or None} for t in todays[:TODAY_MAX]],
+        "week": [{"id": t["id"], "title": t["title"], "due": t["due"], "kind": kind(t)} for t in week[:10]],
+        "pool": pool[:30],
+        "later": [{"id": t["id"], "title": t["title"], "kind": kind(t), "when": t.get("when"), "due": t.get("due")}
+                  for t in later[:80]],
+        "pillars": pillars,
+    }
+
+
+def with_tasks(status: dict, open_tasks: list[dict], done_tasks: list[dict], now: datetime) -> dict:
+    """The agent's report with its to-do fields taken from the Pi's list when the Mac no longer reads Things
+    (status["todos"] == "pi"). The job tracker's extras on the job pillar (leads, job_due) are kept."""
+    if status.get("todos") != "pi":
+        return status
+    mine = from_tasks(open_tasks, done_tasks, now)
+    sent = (status.get("pillars") or {}).get("job") or {}
+    job = mine["pillars"].setdefault("job", {"done_week": 0, "open": 0, "last_done": None, "next_due": None})
+    job.update({k: v for k, v in sent.items() if k not in ("done_week", "open", "last_done", "next_due")})
+    if sent.get("next_due"):
+        job["next_due"] = min(job["next_due"] or sent["next_due"], sent["next_due"])
+    return {**status, **mine}

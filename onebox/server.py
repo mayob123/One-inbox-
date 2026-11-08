@@ -23,7 +23,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
-from . import feed
+from . import feed, mailpoll, picalendar
 from .pihole import PiHole
 from .store import Store
 from .triage import POST_SOURCES, capture, when_label
@@ -47,6 +47,10 @@ class Config:
         self.agent_token = env.get("ONEBOX_AGENT_TOKEN", "")
         self.watch_token = env.get("ONEBOX_WATCH_TOKEN", "")
         self.capture_token = env.get("ONEBOX_CAPTURE_TOKEN", "")  # for the iPhone Shortcut; optional
+        # the York calendar feed and study plan the Pi fetches itself (see picalendar)
+        self.calendars = env.get("ONEBOX_CALENDARS", "/etc/onebox-calendars.json")
+        # the mail accounts the Pi reads over IMAP itself (see mailpoll); holds app-specific passwords
+        self.mail = env.get("ONEBOX_MAIL", "/etc/onebox-mail.json")
         self.pihole_url = env.get("PIHOLE_URL", "http://127.0.0.1")
         self.pihole_password = env.get("PIHOLE_PASSWORD", "")
         missing = [n for n, v in [("ONEBOX_UI_KEY", self.ui_key), ("ONEBOX_AGENT_TOKEN", self.agent_token),
@@ -117,6 +121,13 @@ def make_handler(cfg: Config, store: Store):
         def _now(self) -> datetime:
             return datetime.now(cfg.tz)
 
+        def _status(self) -> dict:
+            """The Mac's last report, with Today and the pillars from the Pi's own list once Things is cut off."""
+            status = store.get_meta("things_status", {})
+            if status.get("todos") != "pi":
+                return status
+            return feed.with_tasks(status, store.tasks(), store.tasks("done"), self._now())
+
         # --- routes ----------------------------------------------------
         def do_GET(self):
             url = urlparse(self.path)
@@ -126,15 +137,18 @@ def make_handler(cfg: Config, store: Store):
             if path in ("/feed/watch.json", "/feed/today.json"):
                 if not _same(self.headers.get("X-OneInbox-Token", ""), cfg.watch_token):
                     return self._send(401)
-                status = store.get_meta("things_status", {})
+                status = self._status()
                 pal = store.get_meta("pal")
                 if path == "/feed/watch.json":
                     return self._json(200, feed.build(status, store.xp(), self._now(), self._todo_state(), pal))
                 items = store.items()
                 waiting = Counter(i.get("kind") for i in items if i["status"] == "decide" and not i["decision"]
                                   and not i.get("post"))
-                return self._json(200, feed.today(status, store.xp(), self._now(), self._todo_state(), waiting, pal,
-                                                  feed.post_summary(items, self._now())))
+                out = feed.today(status, store.xp(), self._now(), self._todo_state(), waiting, pal,
+                                 feed.post_summary(items, self._now()))
+                mail = store.get_meta("mail_sync") or {}
+                out["pi_mail_at"] = mail.get("at") if not mail.get("errors") or mail.get("mail") else None
+                return self._json(200, out)
             if path == "/api/post":
                 if not (self._agent_ok() or self._todo_ok()):
                     return self._send(401)
@@ -165,7 +179,7 @@ def make_handler(cfg: Config, store: Store):
                 return self._json(200, {
                     "items": store.items(),
                     "last_sync": store.get_meta("last_sync"),
-                    "things": store.get_meta("things_status", {}),
+                    "things": self._status(),
                     "xp": store.xp(),
                 })
             if path == "/api/tasks":
@@ -236,7 +250,7 @@ def make_handler(cfg: Config, store: Store):
                         return self._json(400, {"error": "source must be one of " + ", ".join(POST_SOURCES)})
                     n = store.check_post(source)
                     # tick the rolling "Check Aula (3 new)" to-do too; the Mac completes it in Things
-                    for r in store.get_meta("things_status", {}).get("today") or []:
+                    for r in self._status().get("today") or []:
                         if r.get("id") and (r.get("title") or "").startswith(f"Check {source} ("):
                             store.todo_action(r["id"], "done", self._now().date().isoformat())
                     return self._json(200, {"ok": True, "checked": n})
@@ -270,22 +284,28 @@ def make_handler(cfg: Config, store: Store):
                         return self._send(401)
                     body = self._body()
                     uuid = str(body.get("id") or "")
-                    status = store.get_meta("things_status", {})
+                    status = self._status()
                     known = {r.get("id") for k in ("today", "pool", "week", "later") for r in status.get(k) or []}
                     if uuid not in known:
-                        return self._json(404, {"error": "Not in today's Things list."})
+                        return self._json(404, {"error": "Not on today's list."})
                     day = self._now().date()
-                    if m.group(1) == "later":
+                    mine = status.get("todos") == "pi" and store.task(uuid) is not None
+                    if mine and m.group(1) == "done":  # the Pi's own to-do: tick it off the list itself
+                        store.finish_task(uuid, day.isoformat())
+                    elif m.group(1) == "later":
                         try:
                             back = date.fromisoformat(str(body.get("when") or ""))
                         except ValueError:
                             return self._json(400, {"error": "when must be a date like 2026-11-03."})
                         if not day < back <= day + timedelta(days=LATER_MAX_DAYS):
                             return self._json(400, {"error": f"when must be after today and within {LATER_MAX_DAYS} days."})
-                        store.todo_action(uuid, "later", back.isoformat())
+                        if mine:
+                            store.push_task(uuid, back.isoformat())
+                        else:
+                            store.todo_action(uuid, "later", back.isoformat())
                     else:
                         store.todo_action(uuid, m.group(1), day.isoformat())
-                    status = store.get_meta("things_status", {})
+                    status = self._status()
                     return self._json(200, {"ok": True, **feed.build(status, store.xp(), self._now(), self._todo_state())})
                 if path == "/api/pal":
                     if not self._capture_ok():
@@ -409,6 +429,8 @@ def main() -> None:
     cfg = Config()
     store = Store(cfg.db)
     threading.Thread(target=backup_loop, args=(cfg, store), daemon=True).start()
+    threading.Thread(target=picalendar.loop, args=(cfg.calendars, store, cfg.tz), daemon=True).start()
+    threading.Thread(target=mailpoll.loop, args=(cfg.mail, store, cfg.tz), daemon=True).start()
     httpd = ThreadingHTTPServer((cfg.host, cfg.port), make_handler(cfg, store))
     print(f"One Inbox listening on http://{cfg.host}:{cfg.port}")
     httpd.serve_forever()
