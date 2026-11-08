@@ -18,7 +18,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from . import studycal
+from . import friends, studycal
 from .store import Store
 
 EVERY = 30 * 60  # the feeds change rarely; half-hourly is plenty
@@ -33,7 +33,7 @@ def load(path: str) -> dict:
         return {}
     if not isinstance(cfg, dict):
         raise ValueError(f"{path} must hold a JSON object")
-    out = {k: cfg[k] for k in ("calendars", "deadlines", "study") if cfg.get(k)}
+    out = {k: cfg[k] for k in ("calendars", "deadlines", "study", "friend_calendars") if cfg.get(k)}
     for c in out.get("calendars") or []:
         url = str(c.get("url") or "")
         if url and not url.startswith(("http://", "https://", "webcal://")):
@@ -46,6 +46,11 @@ def load(path: str) -> dict:
 def sync(store: Store, cfg: dict, now: datetime, fetcher=studycal.fetch) -> dict:
     """Add what's due now from the feeds onto the Pi's list. Returns {"added": n, "errors": [...]}."""
     if not cfg:
+        return {}
+    if cfg.get("friend_calendars"):  # friends named in Ben's own calendar: catch-ups and plans
+        got = friends.sync_calendars(store, cfg["friend_calendars"], now, fetcher)
+        store.set_meta("friends_calendar_sync", {"at": now.isoformat(timespec="seconds"), **got})
+    if not any(cfg.get(k) for k in ("calendars", "deadlines", "study")):
         return {}
     events, errors = studycal.collect(cfg, now, fetcher)
     seen = store.get_meta(SEEN_KEY, {}) or {}
