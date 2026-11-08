@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from .triage import grade_post
+
 FEED_VERSION = 1
 NEXT_MAX = 20
 KINDS = {"bill", "school", "admin", "msc", "job", "danish", "friend", "body", "travel", "other"}
@@ -171,13 +173,16 @@ def pillars(status: dict, waiting_mail: dict, ticked: list[dict], now: datetime)
 
 
 POST_DAYS = 14  # unread alerts older than this stop counting
-POST_LIST_MAX = 10
+POST_LIST_MAX = 10  # per tier
 
 
 def post_summary(items: list[dict], now: datetime) -> list[dict]:
     """Unread official post (Aula, e-Boks, Digital Post) per source, oldest alert first:
-    [{"source": "Aula", "count": 3, "since": iso, "latest": "Ny besked fra …", "items": [{"id", "title", "received"}]}].
-    `items` are the Pi's triage items; an alert is unread until Ben marks it checked."""
+    [{"source": "Aula", "count": 3, "needs": 1, "fyi": 2, "since": iso, "latest": "Ny besked fra …",
+      "items": [{"id", "title", "received", "tier", "what"}]}].
+    `items` are the Pi's triage items; an alert is unread until Ben marks it checked. `needs` is what the phone
+    counts: alerts graded "fyi" (photos, posts, payslips) only show when he opens the list. An alert graded before
+    tiers existed counts as needs. `since` and `latest` follow the needs alerts when there are any."""
     groups: dict = {}
     for it in items:
         src = it.get("post")
@@ -189,14 +194,22 @@ def post_summary(items: list[dict], now: datetime) -> list[dict]:
             continue
         if received.tzinfo and now.tzinfo and now - received > timedelta(days=POST_DAYS):
             continue
+        if not it.get("tier"):  # stored before alerts were graded (or not re-read since): grade it now
+            it = dict(it)
+            grade_post(it)
         groups.setdefault(src, []).append(it)
     out = []
     for src, rows in sorted(groups.items()):
         rows.sort(key=lambda r: r["received"])
-        out.append({"source": src, "count": len(rows), "since": rows[0]["received"],
-                    "latest": short(rows[-1].get("title"), TITLE_MAX),
-                    "items": [{"id": r["id"], "title": short(r.get("title"), TITLE_MAX), "received": r["received"]}
-                              for r in rows[-POST_LIST_MAX:]]})
+        needs = [r for r in rows if r.get("tier") != "fyi"]
+        lead = needs or rows
+        fyi = [r for r in rows if r.get("tier") == "fyi"]
+        shown = sorted(needs[-POST_LIST_MAX:] + fyi[-POST_LIST_MAX:], key=lambda r: r["received"])
+        out.append({"source": src, "count": len(rows), "needs": len(needs), "fyi": len(fyi),
+                    "since": lead[0]["received"], "latest": short(lead[-1].get("title"), TITLE_MAX),
+                    "items": [{"id": r["id"], "title": short(r.get("title"), TITLE_MAX), "received": r["received"],
+                               "tier": "fyi" if r.get("tier") == "fyi" else "needs", "what": r.get("what") or None}
+                              for r in shown]})
     return out
 
 

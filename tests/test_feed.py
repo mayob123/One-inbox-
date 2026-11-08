@@ -62,6 +62,27 @@ class FeedTests(unittest.TestCase):
         self.assertEqual([(s["source"], s["count"]) for s in out], [("Aula", 2), ("e-Boks", 1)])
         self.assertEqual((out[0]["since"], out[0]["latest"]), (items[0]["received"], "Ny besked 2"))
         self.assertEqual([i["id"] for i in out[0]["items"]], ["p1", "p2"])
+        self.assertEqual((out[0]["needs"], out[0]["fyi"], out[0]["items"][0]["tier"]), (2, 0, "needs"))  # "besked"
+
+    def test_post_stored_before_tiers_is_graded_on_the_fly(self):
+        now = datetime(2026, 11, 8, 20, 0, tzinfo=timezone.utc)
+        old = {"id": "a1", "status": "decide", "post": "Aula", "title": "Nyt fra Barndommens Land", "decision": None,
+               "received": (now - timedelta(days=2)).isoformat()}
+        out = post_summary([old], now)[0]
+        self.assertEqual((out["needs"], out["fyi"], out["items"][0]["what"]), (0, 1, "Update · Barndommens Land"))
+        self.assertNotIn("tier", old)  # the stored item isn't changed
+
+    def test_post_summary_counts_needs_and_fyi(self):
+        now = datetime(2026, 11, 8, 18, 0, tzinfo=timezone.utc)
+        def alert(i, hours, tier, what):
+            return {"id": f"a{i}", "status": "decide", "post": "Aula", "title": "Nyt fra Barndommens Land",
+                    "decision": None, "received": (now - timedelta(hours=hours)).isoformat(), "tier": tier, "what": what}
+        items = [alert(i, 30 - i, "fyi", "Photos") for i in range(14)] + [alert(99, 5, "needs", "Message")]
+        out = post_summary(items, now)[0]
+        self.assertEqual((out["count"], out["needs"], out["fyi"]), (15, 1, 14))
+        self.assertEqual(out["since"], items[-1]["received"])  # follows the alert that needs Ben
+        self.assertEqual(len(out["items"]), 11)  # the newest 10 FYI plus the message
+        self.assertEqual([i["what"] for i in out["items"] if i["tier"] == "needs"], ["Message"])
 
     def test_small_jobs_and_week_in_today_feed(self):
         status = {"left": 1, "next": "A", "next_id": "A", "today": [{"id": "A", "title": "A", "kind": "admin"}],

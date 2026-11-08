@@ -185,6 +185,8 @@ class Item:
     evidence: list = field(default_factory=list)
     auto: str = ""  # "things": the Pi queues it for Things as soon as it first sees it
     post: str = ""  # "Aula", "e-Boks" or "Digital Post": an official post alert, counted rather than added
+    tier: str = ""  # post alerts only: "needs" (Ben has to look) or "fyi" (folds away on its own), see grade_post
+    what: str = ""  # post alerts only: "Message", "Photos", "Letter from Skattestyrelsen", ...
     from_addr: str = ""  # sender's address, used to remember "no action needed"
     ref: str = ""  # the message in Mail (account:rowid), so the Mac can read its body for details
 
@@ -209,8 +211,9 @@ def _domain_matches(domain: str, allowed: tuple) -> bool:
 def is_scam(msg: Message) -> str | None:
     """Return a reason when the mail claims a brand its sender domain doesn't own."""
     hay = f"{msg.sender_name} {msg.subject}".lower()
+    relayed = official_post(msg) is not None  # real e-Boks/mit.dk alerts name the sender: "ny post fra Skattestyrelsen"
     for brand, domains in BRANDS.items():
-        if brand in hay and not _domain_matches(msg.domain, domains):
+        if brand in hay and not relayed and not _domain_matches(msg.domain, domains):
             return f"Says it's from {brand.title()}, but was sent from {msg.domain or 'an unknown address'}."
     if SCAM_SUBJECT.search(msg.subject):
         return f"Asks you to update payment or account details, sent from {msg.domain or 'an unknown address'}."
@@ -223,6 +226,76 @@ def official_post(msg: Message) -> str | None:
         if _domain_matches(msg.domain, domains):
             return name
     return None
+
+
+# --- Official post: "needs you" or "FYI" -----------------------------------
+# Aula and e-Boks send hundreds of alerts that only say "something new is waiting". The alert's subject and
+# body still say what kind of thing it is (a message, a post, photos) or who the letter is from (Skattestyrelsen,
+# a payslip), so each alert gets a tier. Only "needs" alerts count on the phone; "fyi" ones fold away. When
+# nothing matches, Aula leans FYI (most of it is posts and photos) and e-Boks/Digital Post lean "needs" (a
+# letter from an unknown sender is safer looked at).
+POST_KINDS = {
+    "Aula": [  # (pattern, what, tier); first match wins, so the "needs" ones come first
+        (r"tilmeld|samtykke|formular|underskriv|svar senest|frist|deadline|husk at|"
+         r"forældremøde|forældresamtale|skolehjem|aflys|lukke(t|dag)|syg", "Needs a reply or date", "needs"),
+        (r"besked|message|skrevet til dig|har sendt dig", "Message", "needs"),
+        (r"invitation|inviteret|begivenhed|arrangement|event", "Event", "needs"),
+        (r"billede|foto|galleri|album|medie|video", "Photos", "fyi"),
+        (r"ugeplan|ugebrev|nyhedsbrev|madplan|menu|dagbog|dagens|opslag|post\b", "Post", "fyi"),
+    ],
+    "letters": [  # e-Boks and Digital Post
+        (r"rykker|påmindelse|inkasso|betalingsfrist|frist|opkrævning|indkaldelse|reminder", "Reminder or deadline", "needs"),
+        (r"skattestyrelsen|\bskat\b|kommune|udbetaling danmark|familieretshus|politi|domstol|retten|"
+         r"styrelsen|nyidanmark|siri\b|folkeregister|cpr", "Letter from the authorities", "needs"),
+        (r"a-kasse|akademikernes|\baka\b", "A-kasse", "needs"),
+        (r"hospital|sygehus|region |læge|tandlæge|vaccin", "Health", "needs"),
+        (r"arbejdsgiver|lønseddel|lønsedler|payslip|pension|nyhedsbrev|newsletter|kontoudtog|depot|årsoversigt|"
+         r"kvittering|receipt|bekræftelse|velkommen|information om", "Payslip, pension or info", "fyi"),
+    ],
+}
+POST_DEFAULT = {"Aula": ("Update", "fyi")}
+AULA_FROM = re.compile(r"^\s*nyt fra (.+?)\s*$", re.I)  # "Nyt fra Barndommens Land": the school or daycare
+SENT_BY = re.compile(r"(?:fra|from|afsender:?)\s+([A-ZÆØÅ][\w&.\- ]{2,40}?)(?:[.,:\n]|\s{2}|$)")
+POST_DETAIL_DAYS = 14  # alerts this new always get their body read, so they can be graded
+
+
+def grade_post(item) -> None:
+    """Sets an official post alert's tier ("needs"/"fyi") and what it is, from its subject and, once read, its
+    body (excerpt). Works on an Item or its dict."""
+    get = item.get if isinstance(item, dict) else lambda k, d="": getattr(item, k, d)
+    source = get("post", "")
+    if not source:
+        return
+    text = f"{get('title', '')}\n{get('excerpt', '') or ''}"
+    what, tier = POST_DEFAULT.get(source, ("Letter", "needs"))
+    for pattern, w, t in POST_KINDS["Aula" if source == "Aula" else "letters"]:
+        if re.search(pattern, text, re.I):
+            what, tier = w, t
+            break
+    if source == "Aula":
+        place = AULA_FROM.match(get("title", "") or "")
+        if place:
+            what = f"{what} · {place.group(1)}"
+    else:
+        who = SENT_BY.search(text)
+        if who and who.group(1).strip().lower() not in {"e-boks", "digital post", "mit.dk"}:
+            what = f"{what}: {who.group(1).strip()}" if what != "Letter" else f"Letter from {who.group(1).strip()}"
+    if isinstance(item, dict):
+        item["tier"], item["what"] = tier, what
+    else:
+        item.tier, item.what = tier, what
+
+
+def want_details(items: list[dict], now: datetime, days: int, limit: int) -> list[dict]:
+    """The emails whose bodies are worth reading: every post alert from the last two weeks (short, and the body
+    says what it is), then up to `limit` recent emails that need Ben. Shared by the Mac agent and the Pi's mail
+    reader."""
+    def age(it):
+        return now - datetime.fromisoformat(it["received"])
+    post = [it for it in items if it.get("post") and age(it) <= timedelta(days=POST_DETAIL_DAYS)]
+    rest = [it for it in items if it.get("status") == "decide" and not it.get("post")
+            and age(it) <= timedelta(days=days)][:limit]
+    return post + rest
 
 
 def is_noise(msg: Message) -> bool:
@@ -355,13 +428,17 @@ def triage(messages: list[Message], now: datetime | None = None) -> list[Item]:
             fresh = now - msg.received <= timedelta(days=AUTO_ADD_DAYS)
             base["task"] = _cut(f"Read in {post}: {base['title']}")
             why = f"New in {post}. " + (f"Counted in today's Check {post} to-do." if fresh else "Older than a week, so not counted.")
-            items.append(Item(status="decide", why=why, post=post if fresh else "", **base))
+            item = Item(status="decide", why=why, post=post if fresh else "", **base)
+            grade_post(item)
+            items.append(item)
             continue
         if msg.sender_addr.lower() in JOB_ALERT_SENDERS:
             fresh = now - msg.received <= timedelta(days=AUTO_ADD_DAYS)
             base.update(area="Job search", kind="job", task=_cut(f"Look at job alert: {base['title']}"))
-            why = "A job alert. " + ("Counted in today's Check Job alerts to-do." if fresh else "Older than a week, so not counted.")
-            items.append(Item(status="decide", why=why, post=JOB_ALERTS if fresh else "", **base))
+            # Not counted as post any more (2026-11-08): the job search turns alerts into leads in the job tracker,
+            # and Pocket Pal shows those on the Job hunt page. Kept as info so the email can still be found.
+            why = "A job alert. Its jobs go to the job tracker as leads." if fresh else "An older job alert."
+            items.append(Item(status="info", why=why, **base))
             continue
         if kind == "danish" and HOMEWORK.search(msg.subject):
             fresh = now - msg.received <= timedelta(days=AUTO_ADD_DAYS)

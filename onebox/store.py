@@ -170,9 +170,10 @@ class Store:
 
     # --- official post: alerts are counted, then checked in one go ---------
 
-    def check_post(self, source: str, before: str | None = None) -> int:
+    def check_post(self, source: str, before: str | None = None, tier: str | None = None) -> int:
         """Mark unread alerts from `source` (Aula, e-Boks, Digital Post) as checked, all of them or those
-        received up to `before` (an ISO time: when Ben ticked "Check Aula" in Things). Returns how many."""
+        received up to `before` (an ISO time: when Ben ticked "Check Aula" in Things), or only one tier
+        ("needs"/"fyi", see triage.grade_post). Returns how many."""
         cut = None
         if before:
             try:
@@ -185,6 +186,8 @@ class Store:
             for r in self.db.execute("SELECT id, data FROM items WHERE decision IS NULL AND status='decide'").fetchall():
                 d = json.loads(r["data"])
                 if d.get("post") != source:
+                    continue
+                if tier and ("fyi" if d.get("tier") == "fyi" else "needs") != tier:
                     continue
                 if cut is not None:
                     try:

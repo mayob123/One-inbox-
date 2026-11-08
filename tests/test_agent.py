@@ -478,6 +478,15 @@ class AgentTests(unittest.TestCase):
         self.assertNotIn("w2", week)
         self.assertNotIn("t2", week)  # already in Today
 
+    def test_html_only_note_falls_back_to_the_html_part(self):
+        from email.message import EmailMessage
+        m = EmailMessage()
+        m.set_content("Denne email kan ikke vises da den indeholder HTML og din email klient ikke understøtter visning af HTML.")
+        m.add_alternative("<html><body><p>Du har modtaget en ny besked fra Mette i Aula.</p></body></html>", subtype="html")
+        d = agent.message_details(m)
+        self.assertIn("ny besked fra Mette", d["excerpt"])
+        self.assertNotIn("kan ikke vises", d["excerpt"])
+
     def test_mail_details_from_emlx(self):
         raw = (b"Message-ID: <abc123@mail.dk>\r\nFrom: Adil <adil@welcometodanmark.dk>\r\nSubject: Re: manglende lektier\r\n"
                b"Content-Type: text/plain; charset=utf-8\r\n\r\n"

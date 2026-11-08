@@ -35,7 +35,7 @@ from pathlib import Path
 
 from . import friends as friendlist
 from . import studycal
-from .triage import JOB_ALERT_SENDERS, JOB_ALERTS, Message, summary, triage
+from .triage import JOB_ALERT_SENDERS, JOB_ALERTS, Message, grade_post, summary, triage, want_details
 
 HOME = Path.home()
 MAIL_GLOB = str(HOME / "Library/Mail/V*/MailData/Envelope Index")
@@ -125,6 +125,9 @@ EXCERPT_MAX = 1200
 LINKS_MAX = 12
 URL = re.compile(r"https?://[^\s<>\"')\]]+")
 SKIP_LINK = re.compile(r"unsubscribe|afmeld|\.(png|jpe?g|gif)(\?|$)|/track/|list-manage|mailchimp", re.I)
+# A text part that only says to view the HTML one ("Denne email kan ikke vises da den indeholder HTML…").
+HTML_ONLY_NOTE = re.compile(r"kan ikke vises da den indeholder HTML|understøtter (ikke )?visning af HTML|"
+                            r"does not support HTML|view this (e-?mail|message) in (a|your) browser", re.I)
 # Where a reply's quoted history starts: "On Tue, ... wrote:", "Den ... skrev ...:", a ">" line, Outlook's "From:".
 HTML_QUOTE = re.compile(r'<blockquote|class="gmail_quote|id="divRplyFwdMsg|id="appendonsend', re.I)
 QUOTE = re.compile(r"^(On .+wrote:|Den .+skrev.*:|>|-----Original Message|From: .+|Fra: .+)", re.M)
@@ -175,6 +178,8 @@ def message_details(msg: email.message.EmailMessage) -> dict:
             rich = text
     q = HTML_QUOTE.search(rich)
     rich = rich[:q.start()] if q else rich
+    if rich and HTML_ONLY_NOTE.search(plain):  # Aula's text part only says "this email needs HTML"
+        plain = ""
     if not plain and rich:
         plain = html.unescape(re.sub(r"<[^>]+>", " ", re.sub(r"(?is)<(style|script).*?</\1>|<br\s*/?>|</p>", "\n", rich)))
     m = QUOTE.search(plain)
@@ -200,8 +205,7 @@ def mail_link(message_id: str) -> str:
 def add_details(items: list[dict], mail_db: str, now: datetime, save_to: Path | None = ICLOUD) -> int:
     """Reads the body of recent emails that need Ben, and copies a homework email's attachments to
     iCloud Drive > One Inbox > <kind> so they open on the phone. Returns how many got details."""
-    want = [it for it in items if it.get("status") == "decide" and it.get("ref", "").count(":") == 1
-            and now - datetime.fromisoformat(it["received"]) <= timedelta(days=DETAIL_DAYS)][:DETAIL_MAX]
+    want = [it for it in want_details(items, now, DETAIL_DAYS, DETAIL_MAX) if it.get("ref", "").count(":") == 1]
     if not want:
         return 0
     rowids = {it["ref"].rsplit(":", 1)[1] for it in want}
@@ -228,6 +232,7 @@ def add_details(items: list[dict], mail_db: str, now: datetime, save_to: Path | 
                 saved.append(f"iCloud Drive > One Inbox > {folder.name} > {dest.name}")
             d["saved"] = saved
         it.update(d)
+        grade_post(it)  # the body says what a post alert is
         n += 1
     return n
 
