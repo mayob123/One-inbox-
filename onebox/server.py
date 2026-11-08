@@ -23,7 +23,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
-from . import feed, picalendar
+from . import feed, mailpoll, picalendar
 from .pihole import PiHole
 from .store import Store
 from .triage import POST_SOURCES, capture, when_label
@@ -49,6 +49,8 @@ class Config:
         self.capture_token = env.get("ONEBOX_CAPTURE_TOKEN", "")  # for the iPhone Shortcut; optional
         # the York calendar feed and study plan the Pi fetches itself (see picalendar)
         self.calendars = env.get("ONEBOX_CALENDARS", "/etc/onebox-calendars.json")
+        # the mail accounts the Pi reads over IMAP itself (see mailpoll); holds app-specific passwords
+        self.mail = env.get("ONEBOX_MAIL", "/etc/onebox-mail.json")
         self.pihole_url = env.get("PIHOLE_URL", "http://127.0.0.1")
         self.pihole_password = env.get("PIHOLE_PASSWORD", "")
         missing = [n for n, v in [("ONEBOX_UI_KEY", self.ui_key), ("ONEBOX_AGENT_TOKEN", self.agent_token),
@@ -142,8 +144,11 @@ def make_handler(cfg: Config, store: Store):
                 items = store.items()
                 waiting = Counter(i.get("kind") for i in items if i["status"] == "decide" and not i["decision"]
                                   and not i.get("post"))
-                return self._json(200, feed.today(status, store.xp(), self._now(), self._todo_state(), waiting, pal,
-                                                  feed.post_summary(items, self._now())))
+                out = feed.today(status, store.xp(), self._now(), self._todo_state(), waiting, pal,
+                                 feed.post_summary(items, self._now()))
+                mail = store.get_meta("mail_sync") or {}
+                out["pi_mail_at"] = mail.get("at") if not mail.get("errors") or mail.get("mail") else None
+                return self._json(200, out)
             if path == "/api/post":
                 if not (self._agent_ok() or self._todo_ok()):
                     return self._send(401)
@@ -425,6 +430,7 @@ def main() -> None:
     store = Store(cfg.db)
     threading.Thread(target=backup_loop, args=(cfg, store), daemon=True).start()
     threading.Thread(target=picalendar.loop, args=(cfg.calendars, store, cfg.tz), daemon=True).start()
+    threading.Thread(target=mailpoll.loop, args=(cfg.mail, store, cfg.tz), daemon=True).start()
     httpd = ThreadingHTTPServer((cfg.host, cfg.port), make_handler(cfg, store))
     print(f"One Inbox listening on http://{cfg.host}:{cfg.port}")
     httpd.serve_forever()

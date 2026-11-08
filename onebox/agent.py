@@ -986,11 +986,14 @@ def wake_mail(cfg: dict) -> bool:
 def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> dict:
     now = now or datetime.now().astimezone()
     report: dict = {}
-    if not dry_run and wake_mail(cfg):
+    mail_on_pi = cfg.get("mail_on_pi")  # the Pi reads mail over IMAP itself (onebox.mailpoll)
+    if not dry_run and not mail_on_pi and wake_mail(cfg):
         report["mail_started"] = "Mail wasn't open, so new mail wasn't arriving. Started it in the background."
-    mail_db = cfg.get("mail_db") or newest(MAIL_GLOB)
+    mail_db = None if mail_on_pi else cfg.get("mail_db") or newest(MAIL_GLOB)
     items = []
-    if mail_db:
+    if mail_on_pi:
+        report["mail"] = "Read by the Pi."
+    elif mail_db:
         msgs = read_mail(mail_db, cfg["days"], cfg.get("account_labels"), now)
         triaged = triage(msgs, now)
         items = [i.to_dict() for i in triaged]

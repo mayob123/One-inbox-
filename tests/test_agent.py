@@ -231,6 +231,17 @@ class AgentTests(unittest.TestCase):
         self.assertNotIn("today", body["things"])
         self.assertEqual(report["things_writes"], "off")
 
+    def test_mail_on_pi_leaves_mail_alone(self):
+        cfg = {"mail_db": self.mail, "things_db": self.things, "days": 21, "messages_db": "/nonexistent",
+               "mail_on_pi": True, "things_mirror": False, "job_tracker_db": "", "server": "http://pi", "token": "t"}
+        with mock.patch.object(agent, "read_mail") as read, mock.patch.object(agent, "wake_mail") as wake, \
+                mock.patch.object(agent, "call", return_value={}) as call:
+            report = agent.run_once(cfg, now=NOW)
+        read.assert_not_called()
+        wake.assert_not_called()
+        self.assertEqual(call.call_args_list[0].args[4]["items"], [])
+        self.assertEqual(report["mail"], "Read by the Pi.")
+
     def test_next_events(self):
         cal = os.path.join(self.dir.name, "Calendar.sqlitedb")
         make_calendar(cal)
