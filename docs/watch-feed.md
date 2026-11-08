@@ -141,9 +141,9 @@ Added 2026-10-28. `today.json` also carries:
 
 - `week`: open to-dos with a Things deadline in the next 7 days (or overdue) that are **not** in Today, soonest first, at most 10: `{"id", "title", "kind", "due"}`.
 - `pool`: small, never-urgent jobs for side quests, at most 30: open to-dos in Anytime or Someday with no date, in the **Around the house** project or tagged **Errands** or **5 min**. `{"id", "title", "kind", "project", "errand", "quick", "someday"}`.
-- `post`: unread official post per source, `[{"source": "Aula", "count": 3, "since": iso, "latest": "…", "items": [{"id", "title", "received"}]}]`. Alerts stop counting when checked or after 14 days.
+- `post`: unread official post per source, `[{"source": "Aula", "count": 3, "needs": 1, "fyi": 2, "since": iso, "latest": "…", "items": [{"id", "title", "received", "tier", "what"}]}]`. Alerts stop counting when checked or after 14 days. Each alert is graded (`triage.grade_post`) as `tier` "needs" (a message, an event, a letter from the authorities) or "fyi" (photos, class posts, payslips), and `what` says which. The phone counts `needs` only; `since`/`latest` follow the needs alerts when there are any. `items` holds the newest 10 of each tier. Job alerts are not post (since 2026-11-08): they go to the job tracker as leads.
 
-`POST /api/todo/done` accepts ids from `pool` and `week` too. `POST /api/post/checked` with `{"source": "Aula"}` (watch or capture token) marks that source's alerts as checked and ticks its "Check Aula (n new)" to-do. `GET /api/post` (agent, watch or capture token) returns `{"sources": [...as post above]}`. Official post no longer shows in `/api/waiting` or `waiting_mail`. `watch.json` is unchanged.
+`POST /api/todo/done` accepts ids from `pool` and `week` too. `POST /api/post/checked` with `{"source": "Aula"}` (watch or capture token) marks that source's alerts as checked (add `"tier": "fyi"` to clear only the FYI ones) and ticks its "Check Aula (n new)" to-do. `GET /api/post` (agent, watch or capture token) returns `{"sources": [...as post above]}`. Official post no longer shows in `/api/waiting` or `waiting_mail`. `watch.json` is unchanged.
 
 ## Every to-do on the Pi (phase 1 of moving the list into Pocket Pal)
 
