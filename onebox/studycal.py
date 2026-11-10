@@ -45,7 +45,6 @@ except ImportError:  # pragma: no cover
 SESSION_AHEAD_DAYS = 14      # add sessions up to two weeks ahead
 DEADLINE_AHEAD_DAYS = 120    # deadlines can be added a whole module ahead
 HEADS_UP_DAYS = 7
-NUDGE_DAYS = 2
 REMIND_BEFORE = timedelta(minutes=15)
 MORNING = time(9, 0)
 
@@ -214,12 +213,9 @@ def todos_for(ev: Event, today: date) -> list[dict]:
         if isinstance(ev.start, datetime):
             due_txt += ev.start.strftime(" %H:%M")
         heads_up = max(today, due - timedelta(days=HEADS_UP_DAYS))
-        todos = [dict(base, title=f"{ev.title} (due {due_txt})", when=stamp(heads_up, MORNING),
-                      deadline=due.isoformat())]
-        nudge = due - timedelta(days=NUDGE_DAYS)
-        if nudge > heads_up:
-            todos.append(dict(base, title=f"2 days left: {ev.title} (due {due_txt})", when=stamp(nudge, MORNING)))
-        return todos
+        # One to-do per deadline. Pocket Pal tags it "2 DAYS LEFT" as the day comes, so no second copy (2026-11-09).
+        return [dict(base, title=f"{ev.title} (due {due_txt})", when=stamp(heads_up, MORNING),
+                     deadline=due.isoformat())]
     day = day_of(ev.start)
     if ev.all_day:
         return [dict(base, title=ev.title, when=stamp(day))]

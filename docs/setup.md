@@ -150,7 +150,7 @@ Quick captures can skip Today: start them with `errand:` (Anytime, tag Errands),
 
 The agent reads Calendar.app's database (read-only) for "up next" on the watch. Every calendar Calendar.app shows counts: iCloud, Google, Exchange, and subscribed ones. For MSc lectures from an ICS link, use Calendar → File → New Calendar Subscription and paste the link. Leave calendars out with `"calendar_skip": ["Birthdays", "Work"]` in `agent.json` (the default skips Birthdays, Holidays and Siri Suggestions). `--dry-run` shows how many events it found.
 
-Interviews from the job tracker (`~/Documents/job-tracker/data/job_tracker.db`, read-only) join these events as "Interview: <company>". The job hunt pillar in `today.json` also gets `job_due` (the next deadline of a saved application or a Strong/Possible fit lead), `leads`, `applied_week` and `interview_at`. Strong fit leads and saved applications with a deadline get an "Apply: <title> at <company>" to-do, tagged Job hunt, that lands in Today a week before the deadline (with the Things deadline set) plus a "2 days left" nudge. Change which fit tiers count with `"job_apply_tiers": ["Strong fit", "Possible fit"]`. Point at another file with `"job_tracker_db"` in `agent.json`, or set it to `""` to turn it off.
+Interviews from the job tracker (`~/Documents/job-tracker/data/job_tracker.db`, read-only) join these events as "Interview: <company>". The job hunt pillar in `today.json` also gets `job_due` (the next deadline of a saved application or a Strong/Possible fit lead), `leads`, `applied_week` and `interview_at`. Strong fit leads and saved applications with a deadline get an "Apply: <title> at <company>" to-do, tagged Job hunt, that lands in Today a week before the deadline (with the Things deadline set). Pocket Pal tags it "2 DAYS LEFT" near the day. Change which fit tiers count with `"job_apply_tiers": ["Strong fit", "Possible fit"]`. Point at another file with `"job_tracker_db"` in `agent.json`, or set it to `""` to turn it off.
 
 ## 9. Ticking things off from the watch or phone
 
@@ -167,7 +167,7 @@ When you press done on the watch or in the phone app, the Pi hides the item stra
 The agent can read your uni calendar feed and put it in Things, so the watch shows it:
 
 - **Live sessions, lectures, seminars**: a to-do on that day, titled with the start time ("19:00 Live session: Week 1"), with a Things reminder 15 minutes before. Added up to 14 days ahead.
-- **Deadlines**: a to-do that lands in Today 7 days before, with the Things deadline set to the due date, plus a "2 days left" nudge. Anything called due, deadline, submission, assignment, quiz or exam, or a zero-length event (how Moodle and Canvas export due dates), counts as a deadline.
+- **Deadlines**: a to-do that lands in Today 7 days before, with the Things deadline set to the due date. Pocket Pal tags it "2 DAYS LEFT" near the day; there is no second copy. Anything called due, deadline, submission, assignment, quiz or exam, or a zero-length event (how Moodle and Canvas export due dates), counts as a deadline.
 
 Get the feed link from the VLE's calendar (look for **Export calendar**, **Calendar feed** or **Subscribe**). It ends in `.ics` or starts with `webcal://`. It is private to you, so keep it only in `agent.json`. Then add to `~/.config/onebox/agent.json`:
 

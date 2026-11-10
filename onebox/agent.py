@@ -636,8 +636,8 @@ def _lead(r) -> dict:
 
 def job_deadlines(cfg: dict, now: datetime) -> list[studycal.Event]:
     """Strong-fit leads and saved applications with a deadline, as deadline events for studycal: an
-    "Apply: …" to-do lands in Things Today a week before (with the Things deadline set), plus a nudge
-    two days before. Empty if the tracker is missing or unreadable."""
+    "Apply: …" to-do lands in Things Today a week before (with the Things deadline set).
+    Empty if the tracker is missing or unreadable."""
     path = cfg.get("job_tracker_db", JOB_TRACKER_DB)
     if not path or not os.path.exists(path):
         return []
