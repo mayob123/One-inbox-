@@ -377,9 +377,11 @@ class ServerTests(unittest.TestCase):
 
     def test_official_post_is_a_mailbox(self):
         W, C = {"X-OneInbox-Token": "w" * 20}, {"Authorization": "Bearer " + "c" * 20}
+        day1 = (datetime.now().date() - timedelta(days=2)).isoformat()  # recent, so inside the post window
+        day2 = (datetime.now().date() - timedelta(days=1)).isoformat()
         a1 = dict(ITEM, id="a000000000000001", title="Ny besked", task="Read in Aula: Ny besked", kind="school",
-                  post="Aula", from_addr="noreply@aula.dk", received="2026-10-27T08:00:00+01:00")
-        a2 = dict(a1, id="a000000000000002", title="Ny besked fra Lærer", received="2026-10-27T15:00:00+01:00")
+                  post="Aula", from_addr="noreply@aula.dk", received=f"{day1}T08:00:00+01:00")
+        a2 = dict(a1, id="a000000000000002", title="Ny besked fra Lærer", received=f"{day1}T15:00:00+01:00")
         e1 = dict(a1, id="e000000000000001", title="Du har ny post", post="e-Boks", kind="admin")
         rows = [{"id": "CHK", "title": "Check Aula (2 new)", "kind": "school"}]
         self.web.req(self.base, "POST", "/api/ingest", {"items": [a1, a2, e1], "things": {"left": 1, "today": rows}},
@@ -400,9 +402,9 @@ class ServerTests(unittest.TestCase):
         t = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers=W)[1])
         self.assertEqual([s["source"] for s in t["post"]], ["e-Boks"])
         # Ticking "Check e-Boks" in Things clears what came before it, not what came after
-        e2 = dict(e1, id="e000000000000002", received="2026-10-28T09:00:00+01:00")
+        e2 = dict(e1, id="e000000000000002", received=f"{day2}T09:00:00+01:00")
         self.web.req(self.base, "POST", "/api/ingest",
-                     {"items": [e2], "things": {"left": 0, "post_done": {"e-Boks": "2026-10-27T20:00:00+01:00"}}}, self.agent)
+                     {"items": [e2], "things": {"left": 0, "post_done": {"e-Boks": f"{day1}T20:00:00+01:00"}}}, self.agent)
         t = json.loads(self.web.req(self.base, "GET", "/feed/today.json", headers=W)[1])
         self.assertEqual([(s["source"], s["count"], s["items"][0]["id"]) for s in t["post"]], [("e-Boks", 1, e2["id"])])
         self.assertNotIn("post_done", self.store.get_meta("things_status"))
@@ -436,8 +438,10 @@ class ServerTests(unittest.TestCase):
         self.assertEqual((out["when"], out["list"]), ("2099-11-02", "upcoming"))
 
     def test_agent_todos_and_adopting_things(self):
-        todos = [{"title": "19:00 Live session", "when": "2026-11-09@18:45", "tags": ["MSc"], "list": "York MSc"},
-                 {"title": "Essay (due Fri 13 Nov)", "when": "2026-11-06@08:00", "deadline": "2026-11-13"},
+        soon = (datetime.now().date() + timedelta(days=3)).isoformat()  # a past day would be moved to today
+        due = (datetime.now().date() + timedelta(days=7)).isoformat()
+        todos = [{"title": "19:00 Live session", "when": f"{soon}@18:45", "tags": ["MSc"], "list": "York MSc"},
+                 {"title": "Essay (due Fri 13 Nov)", "when": f"{soon}@08:00", "deadline": due},
                  {"title": ""}]
         self.assertEqual(self.web.req(self.base, "POST", "/api/agent/todos", {"todos": todos},
                                       {"Authorization": "Bearer " + "c" * 20})[0], 401)
@@ -446,8 +450,8 @@ class ServerTests(unittest.TestCase):
         got = {t["title"]: t for t in self.tasks()}
         live = got["19:00 Live session"]
         self.assertEqual((live["kind"], live["when"], live["project"], live["source"]),
-                         ("msc", "2026-11-09", "York MSc", "calendar"))
-        self.assertEqual(got["Essay (due Fri 13 Nov)"]["due"], "2026-11-13")
+                         ("msc", soon, "York MSc", "calendar"))
+        self.assertEqual(got["Essay (due Fri 13 Nov)"]["due"], due)
         # Things' copies become the Pi's own when the Mac stops mirroring Things
         self.ingest(things={"left": 1, "all": [{"id": "T1", "title": "Own to-do", "kind": "admin", "list": "today"}]})
         self.web.req(self.base, "POST", "/api/tasks/T1/done", {}, {"Authorization": "Bearer " + "c" * 20})
