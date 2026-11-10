@@ -264,7 +264,7 @@ def make_handler(cfg: Config, store: Store):
                         return self._send(401)
                     fields = task_fields(self._body(), self._now().date(), new=True)
                     return self._json(201, {"ok": True, "task": store.add_task(fields)})
-                m = re.fullmatch(r"/api/tasks/([A-Za-z0-9-]{1,64})(?:/(done|later))?", path)
+                m = re.fullmatch(r"/api/tasks/([A-Za-z0-9-]{1,64})(?:/(done|later|reopen))?", path)
                 if m:
                     if not self._capture_ok():
                         return self._send(401)
@@ -273,6 +273,10 @@ def make_handler(cfg: Config, store: Store):
                     day = self._now().date()
                     if action == "done":
                         ok = store.finish_task(tid, day.isoformat())
+                    elif action == "reopen":  # undo a tick, or bring back a put-away one
+                        if not store.reopen_task(tid):
+                            return self._json(404, {"error": "No done or put-away to-do with that id."})
+                        return self._json(200, {"ok": True, "task": store.task(tid)})
                     elif action == "later":
                         when = task_fields({"when": body.get("when")}, day).get("when_day")
                         if not when or when <= day.isoformat():
