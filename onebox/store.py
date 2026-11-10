@@ -523,6 +523,18 @@ class Store:
             self.db.commit()
         return bool(n)
 
+    def reopen_task(self, task_id: str) -> bool:
+        """Undo a tick (or a tidy-away): a done or gone to-do goes back on the open list. Someday ones come back
+        as any time. Nothing goes to Things."""
+        with self.lock:
+            n = self.db.execute(
+                """UPDATE tasks SET status='open', done_at=NULL, updated_at=?,
+                          list=CASE WHEN list='someday' THEN 'anytime' ELSE list END
+                   WHERE id=? AND (status IN ('done', 'gone') OR list='someday')""",
+                (now_iso(), task_id)).rowcount
+            self.db.commit()
+        return bool(n)
+
     def push_task(self, task_id: str, when: str) -> bool:
         """Not today: set for `when`. A Things to-do is moved in Things by the Mac too."""
         cur = self.task(task_id)

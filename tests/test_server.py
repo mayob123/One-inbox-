@@ -277,6 +277,17 @@ class ServerTests(unittest.TestCase):
         self.assertEqual((errand["tags"], errand["project"]), (["Home admin", "Errands"], "Around the house"))
         self.assertEqual(self.web.req(self.base, "POST", "/api/tasks", {"title": "x", "tags": "Errands"}, C)[0], 400)
         self.web.req(self.base, "POST", f"/api/tasks/{errand['id']}/done", {}, C)
+        # Ticked by accident: reopen puts it back, open, with no done day; reopening an open one is a 404.
+        back = self.web.req(self.base, "POST", f"/api/tasks/{errand['id']}/reopen", {}, C)
+        self.assertEqual(back[0], 200)
+        self.assertEqual((self.store.task(errand["id"])["status"], self.store.task(errand["id"]).get("done_at")), ("open", None))
+        self.assertEqual(self.web.req(self.base, "POST", f"/api/tasks/{errand['id']}/reopen", {}, C)[0], 404)
+        # A put-away (Someday) one comes back as any time.
+        tucked = json.loads(self.web.req(self.base, "POST", "/api/tasks", {"title": "Old copy", "list": "someday"}, C)[1])["task"]
+        self.assertEqual(self.web.req(self.base, "POST", f"/api/tasks/{tucked['id']}/reopen", {}, C)[0], 200)
+        self.assertEqual(self.store.task(tucked["id"])["list"], "anytime")
+        self.store.close_task(tucked["id"])
+        self.web.req(self.base, "POST", f"/api/tasks/{errand['id']}/done", {}, C)
         self.assertEqual(self.web.req(self.base, "POST", "/api/tasks", {"title": " "}, C)[0], 400)
         self.assertEqual(self.web.req(self.base, "POST", "/api/tasks", {"title": "x", "kind": "nope"}, C)[0], 400)
         self.assertEqual(self.web.req(self.base, "POST", f"/api/tasks/{new['id']}", {"title": "Book the PD3 exam"}, C)[0], 200)
