@@ -242,6 +242,19 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(call.call_args_list[0].args[4]["items"], [])
         self.assertEqual(report["mail"], "Read by the Pi.")
 
+    def test_jobs_on_pi_leaves_the_tracker_alone(self):
+        tracker = os.path.join(self.dir.name, "job_tracker.db")
+        make_job_tracker(tracker)
+        cfg = {"mail_db": self.mail, "things_db": self.things, "days": 21, "messages_db": "/nonexistent",
+               "mail_on_pi": True, "things_mirror": False, "job_tracker_db": tracker, "jobs_on_pi": True,
+               "server": "http://pi", "token": "t"}
+        with mock.patch.object(agent, "call", return_value={}) as call, mock.patch.object(agent, "job_tracker") as read:
+            report = agent.run_once(cfg, now=NOW)
+        read.assert_not_called()
+        self.assertEqual(report["job_tracker"], "Read by the Pi.")
+        self.assertNotIn("job", call.call_args_list[0].args[4]["things"].get("pillars", {}))
+        self.assertEqual(agent.sync_calendars(cfg, NOW), {})  # no "Apply:" to-dos from the Mac either
+
     def test_mail_skip_accounts_leaves_those_to_the_pi(self):
         cfg = {"mail_db": self.mail, "things_db": self.things, "days": 21, "messages_db": "/nonexistent"}
         everything = agent.run_once(cfg, now=NOW, dry_run=True)["mail"]

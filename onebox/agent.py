@@ -1100,7 +1100,10 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
     if not reads_things or things_db:
         status["friends_overdue"] = friends_overdue(cfg.get("messages_db", MESSAGES_DB), cfg.get("friends", []), now)
         status["events"], report["calendar"] = read_calendar(cfg, now)
-        report["job_tracker"] = read_job_tracker(cfg, status, now)
+        if cfg.get("jobs_on_pi"):  # the Pi reads the job tracker itself (onebox.pijobs)
+            report["job_tracker"] = "Read by the Pi."
+        else:
+            report["job_tracker"] = read_job_tracker(cfg, status, now)
         payload["things"] = status
         report["things"] = {k: v for k, v in status.items() if k not in ("completed_ids", "pool", "week", "later", "all")}
         if reads_things:
@@ -1151,7 +1154,7 @@ def calendar_preview(cfg: dict, now: datetime) -> dict:
 def sync_calendars(cfg: dict, now: datetime) -> dict:
     if cfg.get("calendars_on_pi"):  # the Pi fetches the York feed and study plan itself; only job deadlines here
         cfg = {k: v for k, v in cfg.items() if k not in ("calendars", "deadlines", "study")}
-    jobs = job_deadlines(cfg, now)
+    jobs = [] if cfg.get("jobs_on_pi") else job_deadlines(cfg, now)
     if not cfg.get("calendars") and not cfg.get("deadlines") and not cfg.get("study") and not jobs:
         return {}
     seen_path = Path(cfg.get("calendar_seen", CALENDAR_SEEN))

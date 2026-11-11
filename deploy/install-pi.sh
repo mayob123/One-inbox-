@@ -35,6 +35,21 @@ for f in /etc/onebox-calendars.json /etc/onebox-mail.json; do
 done
 
 install -m 644 deploy/onebox.service /etc/systemd/system/onebox.service
+
+# The job tracker lives in Ben's home folder, which the server can't read: a timer run as Ben copies its
+# database to /var/lib/onebox-jobs every 10 minutes (onebox/pijobs.py reads it there).
+owner="${SUDO_USER:-ben}"
+home="$(getent passwd "$owner" | cut -d: -f6)"
+if [ -f "$home/job-tracker/data/job_tracker.db" ]; then
+  install -d -o "$owner" -g onebox -m 2750 /var/lib/onebox-jobs
+  install -m 755 deploy/copy-job-tracker.py /opt/one-inbox/copy-job-tracker.py
+  sed -e "s#@USER@#$owner#" -e "s#@HOME@#$home#" deploy/onebox-jobcopy.service > /etc/systemd/system/onebox-jobcopy.service
+  install -m 644 deploy/onebox-jobcopy.timer /etc/systemd/system/onebox-jobcopy.timer
+  systemctl daemon-reload
+  systemctl enable --now onebox-jobcopy.timer
+  systemctl start onebox-jobcopy.service && echo "Job tracker copied for One Inbox."
+fi
+
 systemctl daemon-reload
 systemctl enable --now onebox
 systemctl restart onebox
