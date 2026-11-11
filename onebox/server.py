@@ -23,7 +23,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
-from . import feed, friends, mailpoll, picalendar
+from . import feed, friends, mailpoll, picalendar, pijobs
 from .pihole import PiHole
 from .store import Store
 from .triage import POST_SOURCES, capture, when_label
@@ -51,6 +51,8 @@ class Config:
         self.calendars = env.get("ONEBOX_CALENDARS", "/etc/onebox-calendars.json")
         # the mail accounts the Pi reads over IMAP itself (see mailpoll); holds app-specific passwords
         self.mail = env.get("ONEBOX_MAIL", "/etc/onebox-mail.json")
+        # a copy of the job tracker's database the server may read (see pijobs and deploy/onebox-jobcopy.*)
+        self.job_tracker = env.get("ONEBOX_JOB_TRACKER", "/var/lib/onebox-jobs/job_tracker.db")
         self.pihole_url = env.get("PIHOLE_URL", "http://127.0.0.1")
         self.pihole_password = env.get("PIHOLE_PASSWORD", "")
         missing = [n for n, v in [("ONEBOX_UI_KEY", self.ui_key), ("ONEBOX_AGENT_TOKEN", self.agent_token),
@@ -124,7 +126,7 @@ def make_handler(cfg: Config, store: Store):
 
         def _status(self) -> dict:
             """The Mac's last report, with Today and the pillars from the Pi's own list once Things is cut off."""
-            status = store.get_meta("things_status", {})
+            status = pijobs.apply(store.get_meta("things_status", {}), pijobs.fresh(store, self._now()))
             if status.get("todos") == "pi":
                 status = feed.with_tasks(status, store.tasks(), store.tasks("done"), self._now())
             return friends.with_friends(status, store, self._now())
@@ -481,6 +483,7 @@ def main() -> None:
     threading.Thread(target=backup_loop, args=(cfg, store), daemon=True).start()
     threading.Thread(target=picalendar.loop, args=(cfg.calendars, store, cfg.tz), daemon=True).start()
     threading.Thread(target=mailpoll.loop, args=(cfg.mail, store, cfg.tz), daemon=True).start()
+    threading.Thread(target=pijobs.loop, args=(cfg.job_tracker, store, cfg.tz), daemon=True).start()
     httpd = ThreadingHTTPServer((cfg.host, cfg.port), make_handler(cfg, store))
     print(f"One Inbox listening on http://{cfg.host}:{cfg.port}")
     httpd.serve_forever()
