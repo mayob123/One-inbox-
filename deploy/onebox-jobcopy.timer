@@ -1,0 +1,9 @@
+[Unit]
+Description=Copy the job tracker database for One Inbox every 10 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target
