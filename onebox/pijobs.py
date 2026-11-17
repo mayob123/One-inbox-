@@ -10,7 +10,9 @@ the server may read it. Every 10 minutes the server reads that copy, read-only, 
 
 - the Job hunt pillar's extras (good leads, the lead list, the next deadline, applications this week),
 - upcoming interviews, as events,
-- "Apply: …" to-dos a week before a strong lead's deadline, straight onto the Pi's list.
+
+It no longer puts "Apply: …" to-dos on the list (Ben, 2026-11-17, as agreed on 9 Nov: job leads live on the Job hunt
+page, not the to-do list). Any still open are put away (closed, not done; Reopen brings one back).
 
 The result is kept in meta "job_sync"; server._status() uses it in place of what the Mac last sent.
 """
@@ -21,11 +23,11 @@ import os
 import threading
 from datetime import datetime, timedelta, timezone
 
-from . import agent, picalendar, studycal
+from . import agent
 from .store import Store
 
 EVERY = 10 * 60
-SEEN_KEY = "job_seen"
+
 FRESH = timedelta(hours=2)  # older than this (copy timer stopped, file gone) and the Mac's report is used again
 
 
@@ -34,27 +36,22 @@ def sync(store: Store, path: str, now: datetime) -> dict:
     if not path or not os.path.exists(path):
         return {}
     events, extra = agent.job_tracker(path, now)
-    deadlines = agent.job_deadlines({"job_tracker_db": path}, now)
-    added = add_due(store, deadlines, now)
-    report = {"at": now.isoformat(timespec="seconds"), "events": events, "extra": extra, "added": added}
+    put_away = put_away_apply_todos(store)
+    report = {"at": now.isoformat(timespec="seconds"), "events": events, "extra": extra, "added": 0,
+              "put_away": put_away}
     store.set_meta("job_sync", report)
     return report
 
 
-def add_due(store: Store, events: list[studycal.Event], now: datetime) -> int:
-    """'Apply: …' to-dos that are due now, unless one with the same title is already on the list (the Mac's)."""
-    seen = store.get_meta(SEEN_KEY, {}) or {}
-    new = studycal.due_now(events, seen, now)
-    have = {picalendar.same(t["title"], t.get("when")) for s in ("open", "done", "gone") for t in store.tasks(s)}
-    todos = [a for ev in new for a in studycal.todos_for(ev, now.date())
-             if picalendar.same(a["title"], str(a.get("when") or "")[:10] or None) not in have]
-    made = store.add_todos(todos, "calendar", now.date())
-    today = now.date().isoformat()
-    for ev in new:
-        seen[ev.key()] = today
-    keep = now.date().toordinal() - 60
-    store.set_meta(SEEN_KEY, {k: v for k, v in seen.items() if datetime.fromisoformat(v).toordinal() >= keep})
-    return len(made)
+def is_apply_todo(title: str) -> bool:
+    """An "Apply: <job> at <company> (due …)" to-do the job tracker used to add."""
+    return title.startswith("Apply: ") and "(due " in title
+
+
+def put_away_apply_todos(store: Store) -> int:
+    """Close the open "Apply: …" to-dos the job tracker added. Ben's own to-dos are left alone."""
+    return sum(store.close_task(t["id"]) for t in store.tasks("open")
+               if t.get("source") == "calendar" and is_apply_todo(t["title"]))
 
 
 def fresh(store: Store, now: datetime) -> dict | None:
@@ -100,10 +97,10 @@ def loop(path: str, store: Store, tz, stop: threading.Event | None = None) -> No
     while True:
         try:
             got = sync(store, path, datetime.now(tz))
-            if got and (first or got.get("added")):
+            if got and (first or got.get("put_away")):
                 # counts only, never a company or title
                 print(f"One Inbox jobs: {got['extra'].get('leads')} good leads, {len(got['events'])} interviews, "
-                      f"{got['added']} new Apply to-dos", flush=True)
+                      f"{got['put_away']} Apply to-dos put away", flush=True)
                 first = False
         except Exception as e:  # a tracker schema change mustn't take the server down
             print(f"One Inbox jobs failed: {e}", flush=True)

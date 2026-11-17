@@ -130,14 +130,17 @@ OFFICIAL_POST = {
 # file these as junk, so the Mac reads them from Junk too (agent.RESCUE_FROM_JUNK).
 JOB_ALERTS = "Job alerts"
 JOB_ALERT_SENDERS = {"jobalerts-noreply@linkedin.com", "mailservice@jobindex.dk", "jobagent@jobindex.dk"}
-POST_SOURCES = (*OFFICIAL_POST, JOB_ALERTS)
+# Real mail from these senders is counted under the POST button too, not put on the to-do list (Ben, 2026-11-17:
+# only Danish homework and interviews go on the list by themselves). Homework is still matched first.
+MAIL_POST = {
+    "Welcome to Denmark": ("welcometodanmark.dk",),
+    "A-kasse": ("aka.dk",),
+}
+POST_SOURCES = (*OFFICIAL_POST, JOB_ALERTS, *MAIL_POST)
 AUTO_ADD_DAYS = 7  # older alerts and homework stay on the page, so a first sync doesn't flood Things
 # Homework from the Danish teacher goes straight to Things for today.
 HOMEWORK = re.compile(r"lektie|homework|hjemmearbejde|opgave", re.I)
-# Senders whose real mail (not noise, not a receipt) always needs Ben, so it goes straight to Things:
-# the Danish teacher (homework, new class times) and the A-kasse (questions about hours worked).
-AUTO_DOMAINS = ("welcometodanmark.dk", "aka.dk")
-# A job interview being set up goes straight to Things too.
+# A job interview being set up goes straight onto the list.
 INTERVIEW = re.compile(r"interview|samtale", re.I)
 INVITE_PREFIX = re.compile(r"^\s*(opdateret )?invitation\s*:\s*", re.I)
 TICKET_ID = re.compile(r"\s*\[id:[^\]]*\]", re.I)  # "[id:EqVm…]" on support-desk replies
@@ -399,10 +402,15 @@ def triage(messages: list[Message], now: datetime | None = None) -> list[Item]:
         why = "No reply or confirmation found yet."
         if base["lang"] == "da":
             why = "In Danish. " + why
+        fresh = now - msg.received <= timedelta(days=AUTO_ADD_DAYS)
+        mail_post = next((name for name, domains in MAIL_POST.items() if _domain_matches(msg.domain, domains)), None)
+        if mail_post:
+            why += f" Counted under POST as {mail_post}." if fresh else " Older than a week, so not counted."
+            items.append(Item(status="decide", why=why, post=mail_post if fresh else "", **base))
+            continue
         auto = ""
-        if _domain_matches(msg.domain, AUTO_DOMAINS) or (kind == "job" and INTERVIEW.search(msg.subject)):
-            if now - msg.received <= timedelta(days=AUTO_ADD_DAYS):
-                auto, why = "things", why + " Added to Things for today."
+        if kind == "job" and INTERVIEW.search(msg.subject) and fresh:
+            auto, why = "things", why + " Added to your list for today."
         items.append(Item(status="decide", why=why, auto=auto, **base))
     return items
 

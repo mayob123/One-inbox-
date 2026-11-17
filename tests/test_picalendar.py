@@ -56,6 +56,26 @@ class PiCalendarTests(unittest.TestCase):
         self.assertEqual(len(self.store.tasks()), first["added"])
         self.assertTrue(all(t["source"] == "app" for t in self.store.tasks()))
 
+    def test_old_week_early_deadlines_wait_until_two_days_before(self):
+        from datetime import date
+        old = self.store.add_task({"title": "Formative (due Mon 30 Nov 13:00)", "list": "today",
+                                   "when_day": "2026-11-23", "due": "2026-11-30"}, "calendar")
+        pushed = self.store.add_task({"title": "Exam (due Wed 13 Jan 13:00)", "list": "upcoming",
+                                      "when_day": "2027-01-12", "due": "2027-01-13"}, "calendar")
+        mine = self.store.add_task({"title": "My own", "list": "today", "when_day": "2026-11-17",
+                                    "due": "2026-11-30"}, "app")
+        self.assertEqual(picalendar.later_heads_ups(self.store, date(2026, 11, 17)), 1)
+        moved = self.store.task(old["id"])
+        self.assertEqual((moved["when"], moved["list"]), ("2026-11-28", "upcoming"))
+        self.assertEqual(self.store.task(pushed["id"])["when"], "2027-01-12")  # later already: left alone
+        self.assertEqual(self.store.task(mine["id"])["when"], "2026-11-17")  # Ben's own: left alone
+        self.assertEqual(picalendar.later_heads_ups(self.store, date(2026, 11, 17)), 0)
+        # on the day itself it is a Today one
+        late = self.store.add_task({"title": "Pay (due Tue 18 Nov)", "list": "today", "when_day": "2026-11-11",
+                                    "due": "2026-11-18"}, "calendar")
+        picalendar.later_heads_ups(self.store, date(2026, 11, 17))
+        self.assertEqual(self.store.task(late["id"])["list"], "today")
+
     def test_a_file_on_the_mac_is_read_beside_the_settings(self):
         path = os.path.join(self.dir.name, "onebox-calendars.json")
         with open(path, "w") as f:

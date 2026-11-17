@@ -9,7 +9,7 @@ from pathlib import Path
 import threading
 from datetime import date, datetime, timezone
 
-from .todos import task_from_todo, todo_from_item
+from .todos import origin, task_from_todo, todo_from_item
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
@@ -418,6 +418,7 @@ class Store:
                                "created_at", "updated_at", "done_at")}
         d["when"] = r["when_day"]
         d["tags"] = json.loads(r["tags"] or "[]")
+        d["from"] = origin(d)
         return {k: v for k, v in d.items() if v not in (None, [], "")}
 
     def backup(self, folder: str, day: str, keep: int = 14) -> str | None:

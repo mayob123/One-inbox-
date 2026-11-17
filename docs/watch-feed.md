@@ -103,6 +103,8 @@ A to-do's kind comes from its Things tags first: one tag per Pocket Pal pillar (
 
 `/feed/today.json` also has `later`: open to-dos outside Today that aren't parked in Someday (Anytime, Upcoming, the Inbox), up to 80, soonest `when` first. Each is `{id, title, kind, when, due}` (`when` and `due` are ISO days or absent). The phone uses it for its Later list and to show every to-do of a pillar, not just today's.
 
+Every row in `items`, `week`, `pool` and `later`, and every to-do from `GET /api/tasks`, may also carry `from`: where it came from, in a word to show on it. One of `York plan` (the week-by-week MSc list), `York calendar` (Canvas and the York feeds), `Jobs`, `Email`, `Quick add`, `You`, `Things` or `Calendar`. Since 2026-11-17 the Pi adds to-dos by itself from only these: the York plan, the York calendar's deadlines (into Today 2 days before they're due), and email for Danish homework and job interviews. Welcome to Denmark and A-kasse mail is counted under `post` instead, and the job tracker adds no "Apply:" to-dos.
+
 `GET /api/todo/outbox` (agent token) returns `{"ids": [to complete], "later": [{"id", "when"}]}`; `POST /api/todo/ack` with `{"ids": [...]}` marks both kinds as done in Things.
 
 ## Shared Lyra state (phone → Pi → watch)

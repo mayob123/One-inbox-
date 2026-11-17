@@ -8,7 +8,7 @@ import unittest
 from datetime import datetime, timedelta
 from http.server import ThreadingHTTPServer
 
-from onebox import pijobs
+from onebox import pijobs, studycal
 from onebox.server import Config, make_handler
 from onebox.store import Store
 
@@ -33,22 +33,22 @@ class PiJobsTests(unittest.TestCase):
         status = {"at": "2026-10-25T09:00:00+00:00", "pillars": {"job": {"leads": 9}}}
         self.assertEqual(pijobs.apply(status, None), status)
 
-    def test_reads_leads_interviews_and_apply_todos_once(self):
+    def test_reads_leads_and_interviews_but_adds_no_apply_todos(self):
         got = pijobs.sync(self.store, self.db, NOW)
         self.assertEqual(got["extra"]["leads"], 2)
         self.assertEqual([e["title"] for e in got["events"]], ["Interview: DTU"])
-        self.assertEqual(got["added"], 2)  # Strong (in 4 days) and Saved Co (in 6), a week ahead
-        titles = sorted(t["title"] for t in self.store.tasks())
-        self.assertTrue(all(t.startswith("Apply: ") and "(due " in t for t in titles), titles)
-        self.assertEqual(pijobs.sync(self.store, self.db, NOW + timedelta(minutes=10))["added"], 0)
-        self.assertEqual(len(self.store.tasks()), 2)
+        self.assertEqual(got["added"], 0)
+        self.assertEqual(self.store.tasks(), [])
 
-    def test_skips_an_apply_todo_the_mac_already_added(self):
+    def test_open_apply_todos_are_put_away_and_bens_own_stay(self):
         events = pijobs.agent.job_deadlines({"job_tracker_db": self.db}, NOW)
-        mac = [a for ev in events for a in pijobs.studycal.todos_for(ev, NOW.date())]
-        self.store.add_todos(mac[:1], "calendar", NOW.date())
-        self.assertEqual(pijobs.sync(self.store, self.db, NOW)["added"], 1)
-        self.assertEqual(len(self.store.tasks()), 2)
+        old = [a for ev in events for a in studycal.todos_for(ev, NOW.date())]
+        self.store.add_todos(old, "calendar", NOW.date())
+        mine = self.store.add_task({"title": "Apply: the one I typed myself"}, "app")
+        self.assertEqual(pijobs.sync(self.store, self.db, NOW)["put_away"], 2)
+        self.assertEqual([t["id"] for t in self.store.tasks()], [mine["id"]])
+        self.assertEqual(len(self.store.tasks("gone")), 2)
+        self.assertEqual(pijobs.sync(self.store, self.db, NOW + timedelta(minutes=10))["put_away"], 0)
 
     def test_apply_replaces_the_macs_job_part_and_time(self):
         got = pijobs.sync(self.store, self.db, NOW)

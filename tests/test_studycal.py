@@ -128,7 +128,7 @@ class TodoTests(unittest.TestCase):
     def test_deadline_gets_one_heads_up_and_no_copy(self):
         essay = next(e for e in self.events if e.uid == "assign-2@vle")
         [heads_up] = studycal.todos_for(essay, NOW.date())
-        self.assertEqual(heads_up["when"], "2026-12-14@09:00")
+        self.assertEqual(heads_up["when"], "2026-12-19@09:00")  # 2 days before, not a week
         self.assertEqual(heads_up["deadline"], "2026-12-21")
         self.assertIn("due Mon 21 Dec 13:00", heads_up["title"])
 

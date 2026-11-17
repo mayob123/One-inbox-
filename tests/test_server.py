@@ -442,7 +442,7 @@ class ServerTests(unittest.TestCase):
         due = (datetime.now().date() + timedelta(days=7)).isoformat()
         todos = [{"title": "19:00 Live session", "when": f"{soon}@18:45", "tags": ["MSc"], "list": "York MSc"},
                  {"title": "Essay (due Fri 13 Nov)", "when": f"{soon}@08:00", "deadline": due},
-                 {"title": ""}]
+                 {"title": ""}, {"title": "Apply: Analyst at Co (due Fri 13 Nov)", "deadline": due}]
         self.assertEqual(self.web.req(self.base, "POST", "/api/agent/todos", {"todos": todos},
                                       {"Authorization": "Bearer " + "c" * 20})[0], 401)
         code, raw = self.web.req(self.base, "POST", "/api/agent/todos", {"source": "calendar", "todos": todos}, self.agent)
