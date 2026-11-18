@@ -1,0 +1,19 @@
+[Unit]
+Description=One Inbox server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=onebox
+WorkingDirectory=/opt/one-inbox
+EnvironmentFile=/etc/onebox.env
+ExecStart=/usr/bin/python3 -m onebox.server
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/onebox
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+[Unit]
+Description=Copy the job tracker database for One Inbox
+
+[Service]
+Type=oneshot
+User=@USER@
+ExecStart=/usr/bin/python3 /opt/one-inbox/copy-job-tracker.py @HOME@/job-tracker/data/job_tracker.db /var/lib/onebox-jobs/job_tracker.db
