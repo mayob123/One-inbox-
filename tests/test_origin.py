@@ -23,6 +23,10 @@ class OriginTests(unittest.TestCase):
         self.assertEqual(origin({"source": "app", "title": "Mine"}), "You")
         # a York item that went round through Things and was adopted still says York
         self.assertEqual(origin({"source": "app", **york}), "York calendar")
+        # and one that lost its note on the way, but kept the deadline title
+        self.assertEqual(origin({"source": "app", "kind": "msc", "title": "Formative (due Mon 30 Nov 13:00)"}),
+                         "York calendar")
+        self.assertEqual(origin({"source": "app", "title": "Ring about the due date"}), "You")
 
     def test_tasks_and_feed_carry_it(self):
         store = Store(":memory:")
