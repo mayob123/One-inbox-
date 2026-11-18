@@ -5,8 +5,8 @@ and any deadlines typed into the config, then adds to Things:
 
   - a session (lecture, seminar, live class): one to-do on that day, with a Things
     reminder 15 minutes before it starts, so the watch shows it that morning;
-  - a deadline: a to-do that lands in Today 7 days before, with the Things deadline
-    set to the due date, plus a short "due in 2 days" nudge.
+  - a deadline: one to-do with its due date set. It shows under This week until 2 days
+    before, then lands in Today (Ben, 2026-11-17: a week in Today was too long).
 
 Each event is added once. The state file remembers what was sent, keyed by the
 event's UID and start time, so a moved session is added again at its new time.
@@ -44,7 +44,7 @@ except ImportError:  # pragma: no cover
 
 SESSION_AHEAD_DAYS = 14      # add sessions up to two weeks ahead
 DEADLINE_AHEAD_DAYS = 120    # deadlines can be added a whole module ahead
-HEADS_UP_DAYS = 7
+HEADS_UP_DAYS = 2  # a deadline moves into Today this many days before it's due
 REMIND_BEFORE = timedelta(minutes=15)
 MORNING = time(9, 0)
 

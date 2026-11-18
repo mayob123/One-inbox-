@@ -1110,7 +1110,7 @@ def run_once(cfg: dict, now: datetime | None = None, dry_run: bool = False) -> d
             report["small_jobs"], report["this_week"] = len(status["pool"]), len(status["week"])
     if dry_run:
         report["would_send"] = len(items)
-        if cfg.get("calendars") or cfg.get("deadlines") or cfg.get("study") or job_deadlines(cfg, now):
+        if cfg.get("calendars") or cfg.get("deadlines") or cfg.get("study"):
             report["calendar"] = calendar_preview(cfg, now)
         return report
     call(cfg["server"], cfg["token"], "POST", "/api/ingest", payload)
@@ -1144,7 +1144,6 @@ def writes_things(cfg: dict) -> bool:
 
 def calendar_preview(cfg: dict, now: datetime) -> dict:
     events, errors = studycal.collect(cfg, now)
-    events += job_deadlines(cfg, now)
     seen = studycal.load_seen(Path(cfg.get("calendar_seen", CALENDAR_SEEN)))
     new = studycal.due_now(events, seen, now)
     return {"events": len(events), "would_add": [t["attributes"]["title"] for t in studycal.things_json(new, now.date())],
@@ -1154,7 +1153,8 @@ def calendar_preview(cfg: dict, now: datetime) -> dict:
 def sync_calendars(cfg: dict, now: datetime) -> dict:
     if cfg.get("calendars_on_pi"):  # the Pi fetches the York feed and study plan itself; only job deadlines here
         cfg = {k: v for k, v in cfg.items() if k not in ("calendars", "deadlines", "study")}
-    jobs = [] if cfg.get("jobs_on_pi") else job_deadlines(cfg, now)
+    # No "Apply: …" to-dos any more (2026-11-17): job leads live on Pocket Pal's Job hunt page, not the list.
+    jobs = job_deadlines(cfg, now) if cfg.get("job_apply_todos") and not cfg.get("jobs_on_pi") else []
     if not cfg.get("calendars") and not cfg.get("deadlines") and not cfg.get("study") and not jobs:
         return {}
     seen_path = Path(cfg.get("calendar_seen", CALENDAR_SEEN))

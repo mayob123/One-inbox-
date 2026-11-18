@@ -240,11 +240,13 @@ def today(status: dict, xp: int, now: datetime, actions: dict | None = None,
         entry = {"id": it.get("id"), "title": title, "kind": kind if kind in KINDS else "other", "due": it.get("due")}
         if it.get("notes"):
             entry["notes"] = it["notes"]
+        if it.get("from"):  # where it came from: "York plan", "Email", "You"… (2026-11-17)
+            entry["from"] = it["from"]
         items.append(entry)
     return {**build(status, xp, now, pal=pal), "items": items, "pillars": life,
-            "week": _rows(status.get("week"), ("id", "due"), WEEK_MAX),
-            "pool": _rows(status.get("pool"), ("id", "project", "errand", "quick", "someday"), POOL_MAX),
-            "later": _rows(status.get("later"), ("id", "when", "due"), LATER_MAX),
+            "week": _rows(status.get("week"), ("id", "due", "from"), WEEK_MAX),
+            "pool": _rows(status.get("pool"), ("id", "project", "errand", "quick", "someday", "from"), POOL_MAX),
+            "later": _rows(status.get("later"), ("id", "when", "due", "from"), LATER_MAX),
             "post": post or []}
 
 
@@ -289,7 +291,7 @@ def from_tasks(open_tasks: list[dict], done_tasks: list[dict], now: datetime) ->
         errand, quick = bool(tags & ERRAND_TAGS), bool(tags & QUICK_TAGS)
         if errand or quick or (t.get("project") or "").lower() in SMALL_JOB_PROJECTS:
             pool.append({"id": t["id"], "title": t["title"], "project": t.get("project"), "kind": kind(t),
-                         "errand": errand, "quick": quick, "someday": t.get("list") == "someday"})
+                         "errand": errand, "quick": quick, "someday": t.get("list") == "someday", "from": t.get("from")})
     week = sorted([t for t in rest if t.get("due") and t["due"] <= week_end], key=lambda t: t["due"])
     later = [t for t in rest if t.get("list") != "someday"]
     later.sort(key=lambda t: (t.get("when") is None, t.get("when") or "", t.get("due") is None, t.get("due") or "",
@@ -330,11 +332,12 @@ def from_tasks(open_tasks: list[dict], done_tasks: list[dict], now: datetime) ->
         "next_kind": kind(first) if first else None,
         "bill": bill,
         "today": [{"id": t["id"], "title": t["title"], "kind": kind(t), "due": t.get("due"),
-                   "notes": (t.get("notes") or "")[:NOTES_MAX] or None} for t in todays[:TODAY_MAX]],
-        "week": [{"id": t["id"], "title": t["title"], "due": t["due"], "kind": kind(t)} for t in week[:10]],
+                   "notes": (t.get("notes") or "")[:NOTES_MAX] or None, "from": t.get("from")} for t in todays[:TODAY_MAX]],
+        "week": [{"id": t["id"], "title": t["title"], "due": t["due"], "kind": kind(t), "from": t.get("from")}
+                 for t in week[:10]],
         "pool": pool[:30],
-        "later": [{"id": t["id"], "title": t["title"], "kind": kind(t), "when": t.get("when"), "due": t.get("due")}
-                  for t in later[:80]],
+        "later": [{"id": t["id"], "title": t["title"], "kind": kind(t), "when": t.get("when"), "due": t.get("due"),
+                   "from": t.get("from")} for t in later[:80]],
         "pillars": pillars,
     }
 

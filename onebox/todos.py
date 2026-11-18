@@ -79,3 +79,28 @@ def todo_from_item(it: dict) -> dict:
         if it.get(key):
             attrs[key] = it[key]
     return attrs
+
+
+# Where a to-do came from, in a word Pocket Pal shows on it (Ben, 2026-11-17: "make it easier to see what adds what").
+CALENDAR_NOTE = re.compile(r"From (.+?) calendar \(added by One Inbox\)")
+ORIGIN_BY_SOURCE = {"app": "You", "capture": "Quick add", "inbox": "Email", "things": "Things", "calendar": "Calendar"}
+
+
+def origin(task: dict) -> str:
+    """"York plan" (the week-by-week MSc list), "York calendar" (Canvas and the York feeds), "Jobs", "Email",
+    "Quick add", "You", "Things" or "Calendar". The calendar's note wins over the source, so a York item that went
+    round through Things still says York."""
+    notes = task.get("notes") or ""
+    m = CALENDAR_NOTE.search(notes)
+    if m or task.get("source") == "calendar":
+        name = (m.group(1) if m else "").lower()
+        if task.get("title", "").startswith("Apply: ") or "job" in name:
+            return "Jobs"
+        if name == "config":
+            return "York plan" if task.get("kind") == "msc" or "MSc" in (task.get("tags") or []) else "Plan"
+        if any(w in name for w in ("york", "msc", "canvas")):
+            return "York calendar"
+        return "Calendar"
+    if task.get("source") == "app" and "Open the email: " in notes:
+        return "Email"
+    return ORIGIN_BY_SOURCE.get(task.get("source") or "", "You")

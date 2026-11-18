@@ -356,6 +356,8 @@ def make_handler(cfg: Config, store: Store):
                     body = self._body()
                     source = body.get("source") if body.get("source") in ("calendar", "inbox") else "inbox"
                     todos = body.get("todos") if isinstance(body.get("todos"), list) else []
+                    # an older Mac agent may still send job "Apply: …" to-dos; they stay off the list (2026-11-17)
+                    todos = [t for t in todos if not (isinstance(t, dict) and pijobs.is_apply_todo(str(t.get("title") or "")))]
                     made = store.add_todos(todos, source, self._now().date())
                     return self._json(200, {"ok": True, "added": len(made)})
                 if path == "/api/friends":

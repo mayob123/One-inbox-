@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import threading
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import friends, studycal
@@ -56,6 +56,7 @@ def sync(store: Store, cfg: dict, now: datetime, fetcher=studycal.fetch) -> dict
     seen = store.get_meta(SEEN_KEY, {}) or {}
     new = studycal.due_now(events, seen, now)
     tidy_doubles(store)
+    later_heads_ups(store, now.date())
     # any to-do with the same title, whatever made it: the Mac's earlier ones went to Things and came back
     have = {same(t["title"], t.get("when")) for status in ("open", "done", "gone") for t in store.tasks(status)}
     todos = [a for ev in new for a in studycal.todos_for(ev, now.date())
@@ -88,6 +89,24 @@ def tidy_doubles(store: Store) -> int:
             closed += store.close_task(t["id"])
         seen.add(key)
     return closed
+
+
+def later_heads_ups(store: Store, today) -> int:
+    """Deadlines added before 2026-11-17 came into Today a week early. Move each open one forward so it waits until
+    2 days before it's due, like new ones (studycal.HEADS_UP_DAYS). Only ever later, never earlier, so a day Ben
+    picked with Not today stands. Returns how many moved."""
+    moved = 0
+    for t in store.tasks("open"):
+        if t.get("source") != "calendar" or t.get("list") == "someday" or not t.get("due") or not t.get("when"):
+            continue
+        try:
+            start = (date.fromisoformat(t["due"][:10]) - timedelta(days=studycal.HEADS_UP_DAYS)).isoformat()
+        except ValueError:
+            continue
+        if t["when"] < start:
+            lst = "today" if start <= today.isoformat() else "upcoming"
+            moved += store.edit_task(t["id"], {"when_day": start, "list": lst}) == "ok"
+    return moved
 
 
 def loop(path: str, store: Store, tz, stop: threading.Event | None = None) -> None:

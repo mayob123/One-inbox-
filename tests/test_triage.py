@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from onebox.triage import Message, capture, capture_item, is_scam, normalize_subject, triage
+from onebox.triage import POST_SOURCES, Message, capture, capture_item, is_scam, normalize_subject, triage
 
 T0 = datetime(2026, 10, 14, 9, 0, tzinfo=timezone.utc)
 
@@ -157,7 +157,7 @@ class AutoAddTests(unittest.TestCase):
         # other LinkedIn mail is still folded away
         self.assertEqual(triage([msg("X is hiring for a Remote role", "jobs-noreply@linkedin.com")], T0)[0].status, "noise")
 
-    def test_danish_teacher_and_a_kasse_go_to_things(self):
+    def test_danish_school_and_a_kasse_go_to_post_not_the_list(self):
         items = by_title(triage([
             msg("Invitation: WtD - Ben, Thu Oct 29 12:45-13:45", "adil@welcometodanmark.dk", "Adil Mirzakhanova"),
             msg("Vi har brug for oplysninger om dine arbejdstimer", "kontakt@aka.dk", "Akademikernes A-kasse", mid="a"),
@@ -167,12 +167,13 @@ class AutoAddTests(unittest.TestCase):
             msg("Old A-kasse question", "kontakt@aka.dk", days=-10),
         ], T0 + timedelta(days=1)))
         wtd = items["Invitation: WtD - Ben, Thu Oct 29 12:45-13:45"]
-        self.assertEqual((wtd.status, wtd.auto, wtd.task), ("decide", "things", "Danish class: WtD - Ben, Thu Oct 29 12:45-13:45"))
+        self.assertEqual((wtd.status, wtd.auto, wtd.post), ("decide", "", "Welcome to Denmark"))
         self.assertEqual(items["Vi har brug for oplysninger om dine arbejdstimer"].status, "info")  # earlier copy
         aka = items["Vi har brug for oplysninger om dine arbejdstimer [id:EqVm12]"]
-        self.assertEqual((aka.auto, aka.task), ("things", "Deal with: Vi har brug for oplysninger om dine arbejdstimer"))
-        self.assertEqual(items["Invitation for 1. interview - online"].auto, "things")
-        self.assertEqual(items["Old A-kasse question"].auto, "")
+        self.assertEqual((aka.auto, aka.post), ("", "A-kasse"))
+        self.assertEqual(items["Invitation for 1. interview - online"].auto, "things")  # interviews still go on the list
+        self.assertEqual((items["Old A-kasse question"].auto, items["Old A-kasse question"].post), ("", ""))
+        self.assertIn("A-kasse", POST_SOURCES)
         # ordinary mail still waits for a tap
         self.assertEqual(triage([msg("Query about July hours", "mlh@saysky.dk")], T0)[0].auto, "")
 
