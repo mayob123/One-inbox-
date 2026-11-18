@@ -83,6 +83,9 @@ def todo_from_item(it: dict) -> dict:
 
 # Where a to-do came from, in a word Pocket Pal shows on it (Ben, 2026-11-17: "make it easier to see what adds what").
 CALENDAR_NOTE = re.compile(r"From (.+?) calendar \(added by One Inbox\)")
+# "Formative (due Mon 30 Nov 13:00)": the title studycal gives a deadline. Ones that went round through Things
+# lost their note and came back as Ben's own (source app), so the title is the only sign left.
+DEADLINE_TITLE = re.compile(r"\(due (Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{1,2} [A-Z][a-z]{2}( \d{2}:\d{2})?\)$")
 ORIGIN_BY_SOURCE = {"app": "You", "capture": "Quick add", "inbox": "Email", "things": "Things", "calendar": "Calendar"}
 
 
@@ -101,6 +104,10 @@ def origin(task: dict) -> str:
         if any(w in name for w in ("york", "msc", "canvas")):
             return "York calendar"
         return "Calendar"
+    if task.get("source") == "app" and DEADLINE_TITLE.search(task.get("title") or ""):
+        if task.get("title", "").startswith("Apply: "):
+            return "Jobs"
+        return "York calendar" if task.get("kind") == "msc" or "MSc" in (task.get("tags") or []) else "Calendar"
     if task.get("source") == "app" and "Open the email: " in notes:
         return "Email"
     return ORIGIN_BY_SOURCE.get(task.get("source") or "", "You")
